@@ -105,7 +105,16 @@ the exact game id, hand, seat, cards, state version, and public history across
 an application restart. Two concurrent same-version HTTP actions produced
 exactly one accepted revision and one conflict, browser roles remained unable
 to read the private game row, and generated verification data was removed
-afterward. A Vercel deployment is not yet part of this evidence.
+afterward.
+
+The production deployment at `https://pocket-eight-rho.vercel.app` is live on
+Vercel with server functions in Portland (`pdx1`). Public-network verification
+covered a real human action plus bot continuation, exact refresh/reconnect,
+one-winner concurrent updates, safe malformed and client-identity errors,
+privacy of the serialized projection, chip conservation, desktop and 400px
+mobile rendering, and `?mode=mock`. Production WebMCP registration remains to
+be checked in a WebMCP-capable browser; ordinary Chrome renders the intended
+unavailable fallback.
 
 ## Deploying to Vercel
 
