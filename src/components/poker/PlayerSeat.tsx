@@ -33,15 +33,18 @@ export function PlayerSeat({
       <div className={`seat-panel ${isCurrent ? "is-current" : ""}`}>
         {isDealer ? <span className="dealer-chip">D</span> : null}
         <div className="seat-name">
-          {player.displayName}
+          <span>{player.displayName}</span>
           {player.hasAgent ? (
-            <span className="agent-mark" title="Personal agent can use this seat">
-              ◆
+            <span className="agent-badge" title="Personal agent can use this seat">
+              Copilot
             </span>
           ) : null}
         </div>
         <div className="seat-stack">
-          {player.stack} chips · {player.status}
+          <strong>{player.stack}</strong>
+          <span className="chip-unit">chips</span>
+          <span aria-hidden="true">·</span>
+          <span>{player.status}</span>
         </div>
       </div>
     </div>

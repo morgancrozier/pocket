@@ -118,6 +118,10 @@ export function isMockFallbackRequested(search: string): boolean {
   return new URLSearchParams(search).get("mode") === "mock";
 }
 
+export function isDebugPanelRequested(search: string): boolean {
+  return new URLSearchParams(search).get("debug") === "1";
+}
+
 export function isSuggestionLegal(
   situation: PokerSituation,
   suggestion: Pick<AgentSuggestion, "action" | "amount">,

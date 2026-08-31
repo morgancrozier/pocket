@@ -7,6 +7,21 @@ const SUITS = {
   c: "♣",
 } as const;
 
+const SUIT_NAMES = {
+  s: "spades",
+  h: "hearts",
+  d: "diamonds",
+  c: "clubs",
+} as const;
+
+const RANK_NAMES: Record<string, string> = {
+  A: "Ace",
+  K: "King",
+  Q: "Queen",
+  J: "Jack",
+  T: "Ten",
+};
+
 interface PlayingCardProps {
   card?: Card;
   hidden?: boolean;
@@ -25,7 +40,8 @@ export function PlayingCard({ card, hidden = false }: PlayingCardProps) {
     <span
       className="playing-card"
       data-red={isRed}
-      aria-label={`${rank} of ${suit}`}
+      role="img"
+      aria-label={`${RANK_NAMES[rank] ?? rank} of ${SUIT_NAMES[suit]}`}
     >
       <span className="card-rank">{rank}</span>
       <span className="card-suit">{SUITS[suit]}</span>

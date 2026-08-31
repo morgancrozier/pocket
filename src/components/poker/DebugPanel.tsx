@@ -60,10 +60,29 @@ export function DebugPanel({
         return;
       }
 
-      const result = await document.modelContext.executeTool(
-        tool,
-        JSON.stringify(input),
-      );
+      let result: string;
+
+      try {
+        result = await document.modelContext.executeTool(tool, input);
+      } catch (error) {
+        if (
+          !(error instanceof Error) ||
+          !error.message.includes("Failed to parse input arguments")
+        ) {
+          throw error;
+        }
+
+        // Some experimental browser builds require an object at the API
+        // boundary but still parse its string representation internally.
+        const compatibilityInput = Object(
+          JSON.stringify(input),
+        ) as Record<string, unknown>;
+        result = await document.modelContext.executeTool(
+          tool,
+          compatibilityInput,
+        );
+      }
+
       setOutput(result);
     } catch (error) {
       setOutput(error instanceof Error ? error.message : "Tool execution failed.");

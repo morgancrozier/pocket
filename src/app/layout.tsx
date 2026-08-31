@@ -1,10 +1,23 @@
 import type { Metadata } from "next";
+import { Manrope, Newsreader } from "next/font/google";
 import "./globals.css";
+
+const sans = Manrope({
+  subsets: ["latin"],
+  variable: "--font-sans",
+  display: "swap",
+});
+
+const display = Newsreader({
+  subsets: ["latin"],
+  variable: "--font-display",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Pocket — Every seat has two minds",
   description:
-    "A WebMCP-native poker table where personal agents advise and humans play.",
+    "A play-money poker table where your personal copilot advises and you make every move.",
 };
 
 export default function RootLayout({
@@ -14,7 +27,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body className={`${sans.variable} ${display.variable}`}>{children}</body>
     </html>
   );
 }
