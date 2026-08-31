@@ -2,7 +2,6 @@ import type {
   AgentSuggestion,
   HandActionEvent,
   LegalAction,
-  PokerActionType,
   PokerSituation,
   PokerStreet,
 } from "@/types/poker";
@@ -112,7 +111,12 @@ export const INITIAL_SITUATION: PokerSituation = {
       amount: 44,
     },
   ],
+  handResult: null,
 };
+
+export function isMockFallbackRequested(search: string): boolean {
+  return new URLSearchParams(search).get("mode") === "mock";
+}
 
 export function isSuggestionLegal(
   situation: PokerSituation,
@@ -134,8 +138,14 @@ export function isSuggestionLegal(
   }
 
   if (suggestion.action === "raise" || suggestion.action === "bet") {
-    if (typeof suggestion.amount !== "number" || !Number.isFinite(suggestion.amount)) {
-      return { ok: false, reason: `${suggestion.action} requires a numeric amount.` };
+    if (
+      typeof suggestion.amount !== "number" ||
+      !Number.isSafeInteger(suggestion.amount)
+    ) {
+      return {
+        ok: false,
+        reason: `${suggestion.action} requires a whole-chip amount.`,
+      };
     }
 
     if (typeof legal.min === "number" && suggestion.amount < legal.min) {
@@ -156,13 +166,20 @@ export function isSuggestionLegal(
   return { ok: true };
 }
 
-export function describeAction(action: PokerActionType, amount?: number): string {
+export function describeAction(
+  action: HandActionEvent["action"],
+  amount?: number,
+): string {
   const label = action.replace("-", " ");
   if (typeof amount !== "number") {
     return label;
   }
 
-  return `${label} to ${amount}`;
+  if (action === "bet" || action === "raise") {
+    return `${label} to ${amount}`;
+  }
+
+  return `${label} ${amount}`;
 }
 
 export function amountForLegalAction(action: LegalAction): number | undefined {

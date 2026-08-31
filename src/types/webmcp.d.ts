@@ -46,7 +46,7 @@ interface ModelContext {
   getTools(options?: ModelContextGetToolOptions): Promise<RegisteredWebMCPTool[]>;
   executeTool(
     tool: RegisteredWebMCPTool,
-    inputObject?: Record<string, unknown>,
+    inputJson: string,
     options?: ModelContextExecuteToolOptions,
   ): Promise<string>;
 }

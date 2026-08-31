@@ -1,14 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import type { AgentSuggestion } from "@/types/poker";
+import type { AgentSuggestion, PokerSituation } from "@/types/poker";
 import type { WebMCPSupportState } from "@/lib/webmcp/usePokerTools";
 
 interface DebugPanelProps {
   supportState: WebMCPSupportState;
   onFallbackSuggestion: (suggestion: AgentSuggestion) => void;
-  handNumber: number;
-  stateVersion: number;
+  situation: PokerSituation;
 }
 
 function supportsToolInspection(): boolean {
@@ -22,12 +21,27 @@ function supportsToolInspection(): boolean {
 export function DebugPanel({
   supportState,
   onFallbackSuggestion,
-  handNumber,
-  stateVersion,
+  situation,
 }: DebugPanelProps) {
   const [output, setOutput] = useState(
-    "Use these controls to prove the WebMCP interaction before integrating the real poker engine.",
+    "Use these controls to inspect the same player-safe state shown by the table.",
   );
+
+  function currentLegalSuggestion() {
+    const legal =
+      situation.legalActions.find((action) => action.type === "raise") ??
+      situation.legalActions.find((action) => action.type === "bet") ??
+      situation.legalActions.find((action) => action.type === "call") ??
+      situation.legalActions.find((action) => action.type === "check") ??
+      situation.legalActions.find((action) => action.type === "fold");
+
+    if (!legal || !situation.isYourTurn) return null;
+    return {
+      action: legal.type,
+      amount: legal.min ?? legal.amount,
+      confidence: 0.74,
+    };
+  }
 
   async function executeTool(name: string, input: Record<string, unknown> = {}) {
     if (!supportsToolInspection()) {
@@ -46,7 +60,10 @@ export function DebugPanel({
         return;
       }
 
-      const result = await document.modelContext.executeTool(tool, input);
+      const result = await document.modelContext.executeTool(
+        tool,
+        JSON.stringify(input),
+      );
       setOutput(result);
     } catch (error) {
       setOutput(error instanceof Error ? error.message : "Tool execution failed.");
@@ -54,16 +71,30 @@ export function DebugPanel({
   }
 
   function injectFallback() {
+    const legal = currentLegalSuggestion();
+
+    if (!legal) {
+      setOutput("There is no current human action to recommend.");
+      return;
+    }
+
     onFallbackSuggestion({
-      handNumber,
-      stateVersion,
-      action: "raise",
-      amount: 64,
-      confidence: 0.74,
+      handNumber: situation.handNumber,
+      stateVersion: situation.stateVersion,
+      ...legal,
     });
     setOutput(
-      "Fallback recommendation injected directly into React state. This is only for UI development when WebMCP is unavailable.",
+      "A legal recommendation was injected into local React state. No game action was sent.",
     );
+  }
+
+  function executeSuggestionTool() {
+    const suggestion = currentLegalSuggestion();
+    if (!suggestion) {
+      setOutput("There is no current human action to recommend.");
+      return;
+    }
+    void executeTool("suggest_action", suggestion);
   }
 
   return (
@@ -90,18 +121,12 @@ export function DebugPanel({
             </button>
             <button
               className="debug-button"
-              onClick={() =>
-                executeTool("suggest_action", {
-                  action: "raise",
-                  amount: 64,
-                  confidence: 0.74,
-                })
-              }
+              onClick={executeSuggestionTool}
             >
               Call suggest action
             </button>
             <button className="debug-button" onClick={injectFallback}>
-              Inject mock suggestion
+              Inject local suggestion
             </button>
           </div>
           <pre className="debug-output">{output}</pre>

@@ -66,6 +66,21 @@ export interface PokerSituation {
   legalActions: LegalAction[];
   players: PublicPlayerView[];
   recentActions: HandActionEvent[];
+  handResult: HandResult | null;
+}
+
+export interface HandResult {
+  reason: "fold" | "showdown";
+  winners: Array<{
+    playerId: string;
+    playerName: string;
+    amount: number;
+  }>;
+}
+
+export interface PokerActionIntent {
+  action: PokerActionType;
+  amount?: number;
 }
 
 export interface AgentSuggestion {

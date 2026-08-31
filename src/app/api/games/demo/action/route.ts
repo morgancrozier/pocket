@@ -1,0 +1,48 @@
+import { NextRequest, NextResponse } from "next/server";
+import {
+  actionRequestSchema,
+  demoApiErrorResponse,
+  invalidRequestResponse,
+} from "@/lib/poker/demo-api";
+import { DEMO_HERO_ID } from "@/lib/poker/demo-game";
+import { getDemoGameStore } from "@/lib/poker/demo-game-store";
+import { requireDemoUserId } from "@/lib/poker/demo-session";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+export async function POST(request: NextRequest) {
+  let authenticatedUserId: string;
+  try {
+    authenticatedUserId = await requireDemoUserId();
+  } catch (error) {
+    return demoApiErrorResponse(error);
+  }
+
+  let payload: unknown;
+  try {
+    payload = await request.json();
+  } catch {
+    return invalidRequestResponse();
+  }
+
+  const parsed = actionRequestSchema.safeParse(payload);
+  if (!parsed.success) return invalidRequestResponse();
+
+  try {
+    const situation = await getDemoGameStore(authenticatedUserId).act({
+      actorId: DEMO_HERO_ID,
+      expectedStateVersion: parsed.data.expectedStateVersion,
+      intent: {
+        action: parsed.data.action,
+        amount: parsed.data.amount,
+      },
+    });
+
+    return NextResponse.json(situation, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  } catch (error) {
+    return demoApiErrorResponse(error);
+  }
+}
