@@ -1,4 +1,4 @@
-import { describeAction } from "@/lib/poker/mock-state";
+import { describeAction } from "@/lib/poker/decision-presentation";
 import type { RecommendationReceipt } from "@/lib/poker/recommendation-receipt";
 import type { WebMCPSupportState } from "@/lib/webmcp/usePokerTools";
 import type { AgentSuggestion, PokerSituation } from "@/types/poker";

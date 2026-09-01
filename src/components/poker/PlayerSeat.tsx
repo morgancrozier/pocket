@@ -1,10 +1,12 @@
 import { PlayingCard } from "@/components/poker/PlayingCard";
+import type { SeatActionCue } from "@/lib/poker/decision-presentation";
 import type { Card, PublicPlayerView } from "@/types/poker";
 
 interface PlayerSeatProps {
   player: PublicPlayerView;
   isCurrent: boolean;
   isDealer: boolean;
+  actionCue?: SeatActionCue;
   localCards?: Card[];
 }
 
@@ -12,6 +14,7 @@ export function PlayerSeat({
   player,
   isCurrent,
   isDealer,
+  actionCue,
   localCards,
 }: PlayerSeatProps) {
   const visibleCards = localCards?.length ? localCards : player.revealedCards;
@@ -53,6 +56,14 @@ export function PlayerSeat({
           <span aria-hidden="true">·</span>
           <span>{player.status}</span>
         </div>
+        {actionCue ? (
+          <span
+            className={`seat-action-cue ${actionCue.isLatest ? "is-latest" : ""}`}
+          >
+            <span aria-hidden="true">{actionCue.label}</span>
+            <span className="sr-only">{actionCue.ariaLabel}</span>
+          </span>
+        ) : null}
       </div>
     </div>
   );

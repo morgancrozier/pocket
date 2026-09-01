@@ -9,9 +9,13 @@ import {
   useState,
 } from "react";
 import { AgentSuggestionPanel } from "@/components/poker/AgentSuggestionPanel";
+import { DecisionActivity } from "@/components/poker/DecisionActivity";
 import { PlayerSeat } from "@/components/poker/PlayerSeat";
 import { PlayingCard } from "@/components/poker/PlayingCard";
-import { describeAction } from "@/lib/poker/mock-state";
+import {
+  createDecisionPresentation,
+  describeAction,
+} from "@/lib/poker/decision-presentation";
 import {
   createRecommendationReceipt,
   isRecommendationReceiptCurrent,
@@ -673,6 +677,14 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
           : currentPlayer
             ? `${currentPlayer.displayName} is acting`
             : "Hand complete";
+  const decisionPresentation = createDecisionPresentation(
+    playing.situation,
+    {
+      isSpectating,
+      isComplete: playing.phase === "complete",
+    },
+  );
+  const latestHistorySequence = playing.situation.recentActions.at(-1)?.sequence ?? null;
 
   return (
     <div className="prototype room-prototype">
@@ -707,6 +719,7 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
                 player={player}
                 isCurrent={player.id === playing.situation.currentActorId}
                 isDealer={player.seat === playing.situation.dealerSeat}
+                actionCue={decisionPresentation.seatCues[player.id]}
                 localCards={
                   player.id === playing.situation.yourPlayerId
                     ? playing.situation.yourCards
@@ -719,14 +732,15 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
         <div className="decision-dock">
           <section className="action-zone" aria-busy={submitting}>
             <div className="decision-heading">
-              <div>
-                <h2>{turnTitle}</h2>
-                <p aria-live="polite">{error ?? message}</p>
-              </div>
+              <h2>{turnTitle}</h2>
               <span className="decision-context">
                 {isSpectating ? "Public view" : playing.situation.toCall > 0 ? `${playing.situation.toCall} to call` : "Check available"}
               </span>
             </div>
+            <DecisionActivity
+              presentation={decisionPresentation}
+              notice={error ?? (submitting ? message : null)}
+            />
             <div className="action-buttons">
               {playing.situation.legalActions
                 .filter((action) => action.type !== "bet" && action.type !== "raise")
@@ -774,8 +788,21 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
         {playing.situation.recentActions.length ? (
           <ol className="history-list">
             {playing.situation.recentActions.slice(-6).map((event) => (
-              <li className="history-item" key={event.sequence}>
-                <span className="history-street">{event.street}</span>
+              <li
+                className={`history-item ${event.sequence === latestHistorySequence ? "is-latest" : ""}`}
+                key={event.sequence}
+                aria-current={
+                  event.sequence === latestHistorySequence
+                    ? "true"
+                    : undefined
+                }
+              >
+                <span className="history-item-meta">
+                  <span className="history-street">{event.street}</span>
+                  {event.sequence === latestHistorySequence ? (
+                    <span className="history-latest">Latest</span>
+                  ) : null}
+                </span>
                 <strong>{event.playerId === playing.viewer.playerId ? "You" : event.playerName}</strong>
                 <span>{describeAction(event.action, event.amount)}</span>
               </li>

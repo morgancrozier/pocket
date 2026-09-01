@@ -3,19 +3,23 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentSuggestionPanel } from "@/components/poker/AgentSuggestionPanel";
+import { DecisionActivity } from "@/components/poker/DecisionActivity";
 import { DebugPanel } from "@/components/poker/DebugPanel";
 import { PlayerSeat } from "@/components/poker/PlayerSeat";
 import { PlayingCard } from "@/components/poker/PlayingCard";
 import {
   advanceMockStreet,
   appendEvent,
-  describeAction,
   INITIAL_SITUATION,
   isDebugPanelRequested,
   isMockFallbackRequested,
   nextMockBoard,
   nextMockLegalActions,
 } from "@/lib/poker/mock-state";
+import {
+  createDecisionPresentation,
+  describeAction,
+} from "@/lib/poker/decision-presentation";
 import {
   createRecommendationReceipt,
   isRecommendationReceiptCurrent,
@@ -185,7 +189,7 @@ export function PocketPrototype() {
     useState<RecommendationReceipt | null>(null);
   const [suggestionPresentationRevision, setSuggestionPresentationRevision] =
     useState(0);
-  const [tableMessage, setTableMessage] = useState(
+  const [tableMessage, setTableMessage] = useState<string | null>(
     "Preparing your first hand…",
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -241,11 +245,7 @@ export function PocketPrototype() {
     setSituation(next);
     setMode("engine");
     setTableMessage(
-      next.gameResult
-        ? resultMessage(next)
-        : next.isYourTurn
-          ? "The bots posted and acted. Your turn."
-          : resultMessage(next),
+      next.gameResult || next.handResult ? resultMessage(next) : null,
     );
     return next;
   }, []);
@@ -258,7 +258,7 @@ export function PocketPrototype() {
     if (forceMock) {
       setSituation(INITIAL_SITUATION);
       setMode("mock");
-      setTableMessage("Alex raised to 44. Your turn.");
+      setTableMessage(null);
       return () => {
         active = false;
       };
@@ -345,6 +345,16 @@ export function PocketPrototype() {
     () => situation?.players.filter((player) => player.stack > 0).length ?? 0,
     [situation],
   );
+  const decisionPresentation = useMemo(
+    () =>
+      situation
+        ? createDecisionPresentation(situation, {
+            isComplete: Boolean(situation.gameResult),
+          })
+        : null,
+    [situation],
+  );
+  const latestHistorySequence = situation?.recentActions.at(-1)?.sequence ?? null;
   const receiptActionSequence = useMemo(() => {
     if (!situation || !recommendationReceipt) return null;
 
@@ -445,6 +455,10 @@ export function PocketPrototype() {
             isYourTurn: !reachedShowdown,
             currentActorId: reachedShowdown ? null : current.yourPlayerId,
             legalActions: nextMockLegalActions(current.street),
+            players: current.players.map((player) => ({
+              ...player,
+              committedThisStreet: 0,
+            })),
             recentActions: nextActions,
           };
         });
@@ -453,8 +467,8 @@ export function PocketPrototype() {
           action === "fold"
             ? "This practice hand ends here."
             : receipt
-              ? "Alex responded. Your copilot decision remains recorded for this hand."
-              : "Alex responded. The table changed, so any old recommendation expired.",
+              ? "Your copilot decision remains recorded for this hand."
+              : null,
         );
       }, 900);
     },
@@ -484,9 +498,11 @@ export function PocketPrototype() {
         acceptRecommendationReceipt(receipt);
         setSituation(next);
         setTableMessage(
-          next.handResult && !next.gameResult
-            ? `${resultMessage(next)} The next hand starts shortly.`
-            : resultMessage(next),
+          next.handResult
+            ? next.gameResult
+              ? resultMessage(next)
+              : `${resultMessage(next)} The next hand starts shortly.`
+            : null,
         );
       } catch (error) {
         setTableMessage(
@@ -574,7 +590,7 @@ export function PocketPrototype() {
         body: JSON.stringify({ expectedStateVersion: situation.stateVersion }),
       });
       setSituation(next);
-      setTableMessage("A new hand is live. Your turn when the bots finish.");
+      setTableMessage(null);
     } catch (error) {
       setTableMessage(
         error instanceof Error ? error.message : "The next hand could not start.",
@@ -625,7 +641,7 @@ export function PocketPrototype() {
       autoNextHandVersionRef.current = null;
       clearRecommendationReceipt();
       setSituation(next);
-      setTableMessage("A new tournament is live. Four players, 40 chips each.");
+      setTableMessage(null);
     } catch (error) {
       setTableMessage(
         error instanceof Error ? error.message : "The table could not restart.",
@@ -664,7 +680,7 @@ export function PocketPrototype() {
     if (mode === "mock") {
       clearRecommendationReceipt();
       setSituation(INITIAL_SITUATION);
-      setTableMessage("Alex raised to 44. Your turn.");
+      setTableMessage(null);
       return;
     }
 
@@ -783,6 +799,7 @@ export function PocketPrototype() {
                 player={player}
                 isCurrent={player.id === situation.currentActorId}
                 isDealer={player.seat === situation.dealerSeat}
+                actionCue={decisionPresentation?.seatCues[player.id]}
                 localCards={
                   player.id === situation.yourPlayerId
                     ? situation.yourCards
@@ -800,12 +817,15 @@ export function PocketPrototype() {
             aria-busy={isSubmitting}
           >
             <div className="decision-heading">
-              <div>
-                <h2 id="decision-title">{turnTitle}</h2>
-                <p aria-live="polite">{tableMessage}</p>
-              </div>
+              <h2 id="decision-title">{turnTitle}</h2>
               <span className="decision-context">{decisionContext}</span>
             </div>
+            {decisionPresentation ? (
+              <DecisionActivity
+                presentation={decisionPresentation}
+                notice={tableMessage}
+              />
+            ) : null}
             <div className="action-buttons">
               {situation.legalActions
                 .filter(
@@ -955,8 +975,21 @@ export function PocketPrototype() {
         {situation.recentActions.length > 0 ? (
           <ol className="history-list">
             {situation.recentActions.slice(-6).map((event) => (
-              <li className="history-item" key={event.sequence}>
-                <span className="history-street">{event.street}</span>
+              <li
+                className={`history-item ${event.sequence === latestHistorySequence ? "is-latest" : ""}`}
+                key={event.sequence}
+                aria-current={
+                  event.sequence === latestHistorySequence
+                    ? "true"
+                    : undefined
+                }
+              >
+                <span className="history-item-meta">
+                  <span className="history-street">{event.street}</span>
+                  {event.sequence === latestHistorySequence ? (
+                    <span className="history-latest">Latest</span>
+                  ) : null}
+                </span>
                 <strong>
                   {event.playerId === situation.yourPlayerId
                     ? "You"

@@ -173,22 +173,6 @@ export function isSuggestionLegal(
   return { ok: true };
 }
 
-export function describeAction(
-  action: HandActionEvent["action"],
-  amount?: number,
-): string {
-  const label = action.replace("-", " ");
-  if (typeof amount !== "number") {
-    return label;
-  }
-
-  if (action === "bet" || action === "raise") {
-    return `${label} to ${amount}`;
-  }
-
-  return `${label} ${amount}`;
-}
-
 export function amountForLegalAction(action: LegalAction): number | undefined {
   if (typeof action.amount === "number") {
     return action.amount;
