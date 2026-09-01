@@ -31,6 +31,7 @@ import type {
   PokerStreet,
   PublicPlayerView,
 } from "@/types/poker";
+import { groundPokerSituation } from "@/lib/poker/action-context";
 
 const ENVELOPE_VERSION = 1 as const;
 const ENGINE_ID = "@hivetech/poker-engine@1.0.1" as const;
@@ -1075,8 +1076,14 @@ export function isSerializedPokerSituationPrivate(
     }
 
     const safeSituation = projectAuthoritativeGame(authoritative, viewerId);
-    const expected = JSON.parse(JSON.stringify(safeSituation)) as unknown;
-    if (canonicalJson(parsed) !== canonicalJson(expected)) {
+    const expectedSituation = JSON.parse(JSON.stringify(safeSituation)) as unknown;
+    const expectedGroundedSituation = JSON.parse(
+      JSON.stringify(groundPokerSituation(safeSituation)),
+    ) as unknown;
+    if (
+      canonicalJson(parsed) !== canonicalJson(expectedSituation) &&
+      canonicalJson(parsed) !== canonicalJson(expectedGroundedSituation)
+    ) {
       return false;
     }
 

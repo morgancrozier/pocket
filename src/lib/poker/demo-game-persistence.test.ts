@@ -223,7 +223,11 @@ describe("Gate 2 durable demo boundary", () => {
     expect(serialized).not.toContain('"holeCards"');
     expect(serialized).not.toContain('"rank"');
     expect(serialized).not.toContain('"suit"');
-    expect(JSON.parse(webmcpSerialized)).toEqual(situation);
+    expect(JSON.parse(webmcpSerialized)).toMatchObject({
+      ...situation,
+      actionContext: expect.any(Object),
+      situationSummary: expect.any(String),
+    });
     expect(
       opponentCards.every(
         (card) => !serialized.includes(JSON.stringify(card)),

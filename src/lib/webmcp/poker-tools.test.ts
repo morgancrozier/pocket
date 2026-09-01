@@ -91,6 +91,7 @@ describe("createSuggestActionTool", () => {
       await tool.execute({
         action: "raise",
         amount: 80,
+        stateVersion: 4,
         confidence: 0.74,
       }),
     );
@@ -126,12 +127,24 @@ describe("createSuggestActionTool", () => {
       onSuggestion,
     });
 
-    expect(JSON.parse(await tool.execute({ action: "all_in" }))).toMatchObject({
+    expect(
+      JSON.parse(await tool.execute({ action: "call" })),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_STATE_VERSION" },
+    });
+    expect(
+      JSON.parse(
+        await tool.execute({ action: "all_in", stateVersion: 4 }),
+      ),
+    ).toMatchObject({
       ok: false,
       error: { code: "INVALID_ACTION" },
     });
     expect(
-      JSON.parse(await tool.execute({ action: "raise", amount: 12 })),
+      JSON.parse(
+        await tool.execute({ action: "raise", amount: 12, stateVersion: 4 }),
+      ),
     ).toMatchObject({
       ok: false,
       error: { code: "INVALID_AMOUNT" },
@@ -141,7 +154,13 @@ describe("createSuggestActionTool", () => {
       },
     });
     expect(
-      JSON.parse(await tool.execute({ action: "raise", amount: 80.5 })),
+      JSON.parse(
+        await tool.execute({
+          action: "raise",
+          amount: 80.5,
+          stateVersion: 4,
+        }),
+      ),
     ).toMatchObject({
       ok: false,
       error: { code: "INVALID_AMOUNT" },
@@ -162,9 +181,17 @@ describe("createSuggestActionTool", () => {
       stateVersion: situation.stateVersion + 1,
     };
 
-    expect(JSON.parse(await tool.execute({ action: "call" }))).toMatchObject({
+    expect(
+      JSON.parse(await tool.execute({ action: "call", stateVersion: 4 })),
+    ).toMatchObject({
       ok: false,
-      error: { code: "STALE_STATE" },
+      error: {
+        code: "STALE_STATE",
+        message: expect.stringContaining(
+          "authoritative current stateVersion is 5",
+        ),
+        recovery: expect.stringContaining("get_current_situation"),
+      },
       current: { stateVersion: 5 },
     });
     expect(onSuggestion).not.toHaveBeenCalled();
@@ -182,7 +209,9 @@ describe("createSuggestActionTool", () => {
 
     revisionIsCurrent = false;
 
-    expect(JSON.parse(await tool.execute({ action: "call" }))).toMatchObject({
+    expect(
+      JSON.parse(await tool.execute({ action: "call", stateVersion: 4 })),
+    ).toMatchObject({
       ok: false,
       error: { code: "STALE_STATE" },
     });
@@ -203,9 +232,11 @@ describe("createSuggestActionTool", () => {
       currentActorId: "bot-1",
     };
 
-    expect(JSON.parse(await tool.execute({ action: "call" }))).toMatchObject({
+    expect(
+      JSON.parse(await tool.execute({ action: "call", stateVersion: 4 })),
+    ).toMatchObject({
       ok: false,
-      error: { code: "ILLEGAL_RECOMMENDATION" },
+      error: { code: "NOT_YOUR_TURN" },
     });
     expect(onSuggestion).not.toHaveBeenCalled();
   });
@@ -226,13 +257,17 @@ describe("createSuggestActionTool", () => {
       legalActions: [],
       gameResult: { outcome: "won", reason: "last-player-standing" },
     });
-    expect(JSON.parse(await tool.execute({ action: "check" }))).toMatchObject({
+    expect(
+      JSON.parse(await tool.execute({ action: "check", stateVersion: 30 })),
+    ).toMatchObject({
       ok: false,
       error: { code: "GAME_COMPLETE" },
     });
 
     situation = createSituation({ handNumber: 1, stateVersion: 31 });
-    expect(JSON.parse(await tool.execute({ action: "call" }))).toMatchObject({
+    expect(
+      JSON.parse(await tool.execute({ action: "call", stateVersion: 30 })),
+    ).toMatchObject({
       ok: false,
       error: { code: "STALE_STATE" },
     });
@@ -256,7 +291,11 @@ describe("Poker WebMCP definitions", () => {
     });
 
     await situationTool.execute({});
-    await suggestionTool.execute({ action: "raise", amount: 12 });
+    await suggestionTool.execute({
+      action: "raise",
+      amount: 12,
+      stateVersion: 4,
+    });
 
     expect(onActivity.mock.calls.map(([event]) => event)).toEqual([
       { phase: "started", tool: "get_current_situation" },
@@ -310,6 +349,8 @@ describe("Poker WebMCP definitions", () => {
     expect(JSON.parse(await situationTool.execute({}))).toMatchObject({
       stateVersion: 5,
       pot: 148,
+      actionContext: expect.any(Object),
+      situationSummary: expect.any(String),
     });
     expect(JSON.parse(await historyTool.execute({}))).toMatchObject({
       stateVersion: 5,
@@ -371,10 +412,26 @@ describe("Poker WebMCP definitions", () => {
       minimum: number;
       description: string;
     };
+    const stateVersionSchema = suggestionTool.inputSchema.properties
+      ?.stateVersion as {
+      type: string;
+      minimum: number;
+      description: string;
+    };
+    expect(suggestionTool.inputSchema.required).toEqual([
+      "action",
+      "stateVersion",
+    ]);
     expect(actionSchema.enum).toEqual(RECOMMENDATION_ACTIONS);
     expect(actionSchema.enum).not.toContain("all_in");
     expect(amountSchema).toMatchObject({ type: "integer", minimum: 1 });
     expect(amountSchema.description).toContain("raise to X, never raise by X");
+    expect(stateVersionSchema).toMatchObject({ type: "integer", minimum: 1 });
+    expect(stateVersionSchema.description).toContain("get_current_situation");
+    expect(readTools[0]!.description).toContain("authoritative");
+    expect(readTools[0]!.description).toContain(
+      "blind posts never imply another player folded",
+    );
   });
 
   it("marks eliminated read output as spectator-safe without restoring advice", async () => {

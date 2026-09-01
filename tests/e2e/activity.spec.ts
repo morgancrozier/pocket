@@ -51,6 +51,63 @@ test.describe("in-game activity clarity", () => {
     await page.goto("/play?mode=mock");
     await expect(page.getByText("WebMCP tools ready").first()).toBeVisible();
 
+    const browserContract = await page.evaluate(async () => {
+      const tools = await document.modelContext.getTools();
+      const current = tools.find(
+        (candidate) => candidate.name === "get_current_situation",
+      );
+      const suggestion = tools.find(
+        (candidate) => candidate.name === "suggest_action",
+      );
+      if (!current || !suggestion) {
+        throw new Error("Expected WebMCP tools are unavailable.");
+      }
+      return {
+        names: tools.map((tool) => tool.name).sort(),
+        currentDescription: current.description,
+        currentResult: JSON.parse(
+          await document.modelContext.executeTool(current, {}),
+        ),
+        suggestionDescription: suggestion.description,
+        suggestionInputSchema: suggestion.inputSchema,
+      };
+    });
+    expect(browserContract.names).toEqual([
+      "get_current_situation",
+      "get_hand_history",
+      "suggest_action",
+    ]);
+    expect(browserContract.currentDescription).toContain("authoritative");
+    expect(browserContract.currentResult).toMatchObject({
+      stateVersion: 17,
+      actionContext: {
+        bettingRoundState: "raised",
+        isFirstVoluntaryAction: false,
+        nextToAct: {
+          playerId: "hero",
+          playerName: "Morgan",
+          isYou: true,
+        },
+        voluntaryActionsThisStreet: [
+          { playerName: "Morgan", action: "bet", amount: 12 },
+          { playerName: "Alex", action: "raise", amount: 44 },
+        ],
+        foldedPlayers: [],
+      },
+      situationSummary: expect.stringContaining("Alex raised to 44"),
+    });
+    expect(browserContract.currentResult.situationSummary).not.toContain(
+      "folded",
+    );
+    expect(browserContract.suggestionDescription).toContain("never plays");
+    expect(browserContract.suggestionInputSchema).toMatchObject({
+      required: ["action", "stateVersion"],
+      properties: {
+        stateVersion: { type: "integer", minimum: 1 },
+      },
+      additionalProperties: false,
+    });
+
     const initialVersion = await page.evaluate(() =>
       JSON.parse(sessionStorage.getItem("pocket-agent-suggestion") ?? "null"),
     );
@@ -78,7 +135,7 @@ test.describe("in-game activity clarity", () => {
     await page.evaluate(() =>
       (window as typeof window & { __pocketRead: Promise<string> }).__pocketRead,
     );
-    await expect(page.getByText("Read current hand")).toBeVisible();
+    await expect(page.getByText("Read current hand").first()).toBeVisible();
 
     const invalid = await page.evaluate(async () => {
       const tools = await document.modelContext.getTools();
@@ -88,6 +145,7 @@ test.describe("in-game activity clarity", () => {
         await document.modelContext.executeTool(tool, {
           action: "raise",
           amount: 7,
+          stateVersion: 17,
         }),
       ) as { ok: boolean; error?: { code?: string } };
     });
@@ -106,6 +164,7 @@ test.describe("in-game activity clarity", () => {
         await document.modelContext.executeTool(tool, {
           action: "raise",
           amount: 64,
+          stateVersion: 17,
           confidence: 0.72,
         }),
       ) as { ok: boolean };

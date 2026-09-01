@@ -1,4 +1,5 @@
 import { isSuggestionLegal } from "@/lib/poker/mock-state";
+import { groundPokerSituation } from "@/lib/poker/action-context";
 import type {
   AgentSuggestion,
   HandActionEvent,
@@ -25,7 +26,9 @@ export type SuggestionFailureCode =
   | "INVALID_ACTION"
   | "INVALID_AMOUNT"
   | "INVALID_CONFIDENCE"
+  | "INVALID_STATE_VERSION"
   | "NO_SITUATION"
+  | "NOT_YOUR_TURN"
   | "STALE_STATE";
 
 export type PokerToolActivityEvent = {
@@ -107,7 +110,7 @@ export function createCurrentSituationTool({
   return {
     name: "get_current_situation",
     description:
-      "Read the exact current Texas Hold'em situation for the human player in this browser. Returns only information this seat is allowed to know, including the player's cards, board, pot, stacks, recent public actions, and legal actions. For bet or raise, minTotal and maxTotal are final total chips committed on the current street (raise to X, never raise by X). Re-read it whenever the table changes before making a recommendation.",
+      "Read the authoritative, seat-safe state of the current hand. This result overrides previous conversation and visual inspection for current folds, calls, raises, positions, and action sequence. actionContext and situationSummary distinguish forced blind posts from voluntary actions; blind posts never imply another player folded. Bet and raise bounds are final street totals (raise to X). Re-read whenever the table changes before recommending.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -124,7 +127,10 @@ export function createCurrentSituationTool({
         const situation = requireSituation(getSituation);
         const room = getRoomContext?.();
         onActivity?.({ phase: "completed", tool: "get_current_situation" });
-        return JSON.stringify(room ? { ...situation, ...room } : situation);
+        const groundedSituation = groundPokerSituation(situation);
+        return JSON.stringify(
+          room ? { ...groundedSituation, ...room } : groundedSituation,
+        );
       } catch (error) {
         onActivity?.({
           phase: "rejected",
@@ -213,14 +219,12 @@ export function createSuggestActionTool({
   isRevisionCurrent,
   onActivity,
 }: SuggestionToolContext): WebMCPTool {
-  const registeredSituation = requireSituation(getSituation);
-  const registeredHandNumber = registeredSituation.handNumber;
-  const registeredStateVersion = registeredSituation.stateVersion;
+  requireSituation(getSituation);
 
   return {
     name: "suggest_action",
     description:
-      "Place a poker recommendation into the human player's visible Pocket interface. This tool never plays the action. Use get_current_situation first, then suggest one currently legal action. For bet or raise, amount is the final total chips committed on the current street: raise to X, never raise by X. The human will decide whether to use, modify, or reject it.",
+      "Place advice into the human player's visible Pocket interface; this tool never plays a poker action. First call get_current_situation, then pass its exact stateVersion with one currently legal action. A stale result means the table changed and must be re-read. For bet or raise, amount is the final street total: raise to X, never raise by X. The human decides whether to use, modify, or reject the recommendation.",
     inputSchema: {
       type: "object",
       properties: {
@@ -229,6 +233,12 @@ export function createSuggestActionTool({
           enum: RECOMMENDATION_ACTIONS,
           description:
             "The legal poker action to recommend to the human player.",
+        },
+        stateVersion: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "Required exact stateVersion from the get_current_situation result used for this recommendation.",
         },
         amount: {
           type: "integer",
@@ -244,7 +254,7 @@ export function createSuggestActionTool({
             "Optional confidence from 0 to 1. This is displayed as supporting context, not treated as certainty.",
         },
       },
-      required: ["action"],
+      required: ["action", "stateVersion"],
       additionalProperties: false,
     },
     annotations: {
@@ -285,6 +295,27 @@ export function createSuggestActionTool({
         );
       }
 
+      const rawStateVersion = input.stateVersion;
+      if (
+        !Number.isSafeInteger(rawStateVersion) ||
+        Number(rawStateVersion) < 1
+      ) {
+        return reject(
+          "INVALID_STATE_VERSION",
+          "stateVersion must be the positive integer returned by get_current_situation.",
+          current,
+        );
+      }
+      const sourceStateVersion = Number(rawStateVersion);
+
+      if (current.stateVersion !== sourceStateVersion) {
+        return reject(
+          "STALE_STATE",
+          `This recommendation was based on stateVersion ${sourceStateVersion}, but the authoritative current stateVersion is ${current.stateVersion}. Call get_current_situation again before recommending.`,
+          current,
+        );
+      }
+
       if (current.gameResult) {
         return reject(
           "GAME_COMPLETE",
@@ -293,13 +324,10 @@ export function createSuggestActionTool({
         );
       }
 
-      if (
-        current.handNumber !== registeredHandNumber ||
-        current.stateVersion !== registeredStateVersion
-      ) {
+      if (!current.isYourTurn) {
         return reject(
-          "STALE_STATE",
-          "This recommendation target is stale because the hand or table revision changed.",
+          "NOT_YOUR_TURN",
+          "It is no longer the human player's turn. Call get_current_situation again before recommending.",
           current,
         );
       }

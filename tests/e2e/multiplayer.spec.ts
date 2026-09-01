@@ -334,6 +334,7 @@ test("real two-browser room remains seat-safe through spectating and restart", a
     const adviceRevision = adviceRoom.revision;
     await executeTool(advicePage, "suggest_action", {
       action: advice.type,
+      stateVersion: adviceRoom.situation.stateVersion,
       confidence: 0.72,
     });
     await expect(advicePage.getByText("Your copilot suggests")).toBeVisible();

@@ -104,6 +104,8 @@ through the durable demo.
 - `get_hand_history` registered through WebMCP.
 - `suggest_action` registered only while it is the human's turn.
 - `suggest_action` updates the visible table but never plays the move.
+- `suggest_action` requires the exact `stateVersion` returned by the current
+  situation read and rejects stale or no-longer-legal advice.
 - Recommendations show optional agent-provided confidence as context, not as
   certainty, and a same-state recommendation can visibly replace the previous
   one after the human supplies new private context.

@@ -266,7 +266,12 @@ async function installWebMCPStub(
 
 async function suggest(
   page: Page,
-  input: { action: string; amount?: number; confidence?: number },
+  input: {
+    action: string;
+    stateVersion: number;
+    amount?: number;
+    confidence?: number;
+  },
 ) {
   return page.evaluate(async (suggestionInput) => {
     const tools = await document.modelContext.getTools();
@@ -296,7 +301,63 @@ test("an invalid sized WebMCP recommendation returns recovery and a valid retry 
     "WebMCP tools ready",
   );
 
-  const invalid = await suggest(page, { action: "raise", amount: 7 });
+  const browserContract = await page.evaluate(async () => {
+    const tools = await document.modelContext.getTools();
+    const currentSituation = tools.find(
+      (tool) => tool.name === "get_current_situation",
+    );
+    const suggestion = tools.find((tool) => tool.name === "suggest_action");
+    if (!currentSituation || !suggestion) {
+      throw new Error("Expected WebMCP tools were not registered.");
+    }
+    return {
+      toolNames: tools.map((tool) => tool.name).sort(),
+      currentDescription: currentSituation.description,
+      currentResult: JSON.parse(
+        String(
+          await document.modelContext.executeTool(currentSituation, {}),
+        ),
+      ),
+      suggestionDescription: suggestion.description,
+      suggestionInputSchema: suggestion.inputSchema,
+    };
+  });
+  expect(browserContract.toolNames).toEqual([
+    "get_current_situation",
+    "get_hand_history",
+    "suggest_action",
+  ]);
+  expect(browserContract.currentDescription).toContain("authoritative");
+  expect(browserContract.currentResult).toMatchObject({
+    stateVersion: initialSituation.stateVersion,
+    actionContext: {
+      bettingRoundState: "bet",
+      isFirstVoluntaryAction: false,
+      foldedPlayers: [],
+      voluntaryActionsThisStreet: [
+        { playerName: "Alex", action: "bet", amount: 4 },
+      ],
+    },
+    situationSummary: expect.stringContaining("Alex bet to 4"),
+  });
+  expect(browserContract.currentResult.situationSummary).not.toContain(
+    "Theo folded",
+  );
+  expect(browserContract.suggestionDescription).toContain("never plays");
+  expect(browserContract.suggestionInputSchema).toMatchObject({
+    required: ["action", "stateVersion"],
+    properties: {
+      stateVersion: { type: "integer", minimum: 1 },
+      amount: { type: "integer", minimum: 1 },
+    },
+    additionalProperties: false,
+  });
+
+  const invalid = await suggest(page, {
+    action: "raise",
+    amount: 7,
+    stateVersion: initialSituation.stateVersion,
+  });
   expect(invalid).toMatchObject({
     ok: false,
     error: {
@@ -306,7 +367,11 @@ test("an invalid sized WebMCP recommendation returns recovery and a valid retry 
   });
   await expect(page.getByText("Your copilot suggests")).toHaveCount(0);
 
-  const recovered = await suggest(page, { action: "raise", amount: 12 });
+  const recovered = await suggest(page, {
+    action: "raise",
+    amount: 12,
+    stateVersion: initialSituation.stateVersion,
+  });
   expect(recovered).toMatchObject({ ok: true });
   await expect(page.getByText("Your copilot suggests")).toBeVisible();
   await expect(page.locator(".suggestion-action")).toHaveText("Raise to 12");
@@ -430,6 +495,7 @@ test("safe tournament UI replaces and follows advice through restart", async ({
   await suggest(page, {
     action: "raise",
     amount: 12,
+    stateVersion: initialSituation.stateVersion,
     confidence: 0.8,
   });
   await page
@@ -440,7 +506,11 @@ test("safe tournament UI replaces and follows advice through restart", async ({
   await expect(page.getByText("80% confidence")).toBeVisible();
   expect(actionBodies).toHaveLength(0);
 
-  await suggest(page, { action: "call", confidence: 0.64 });
+  await suggest(page, {
+    action: "call",
+    stateVersion: initialSituation.stateVersion,
+    confidence: 0.64,
+  });
   await expect(page.locator(".suggestion-action")).toHaveText("Call");
   await expect(page.getByText("64% confidence")).toBeVisible();
   await expect(page.getByText("Raise to 12", { exact: true })).toHaveCount(0);
@@ -531,7 +601,12 @@ test("rejected actions do not create receipts and accepted overrides do", async 
   await expect(page.locator("header .status-pill")).toHaveText(
     "WebMCP tools ready",
   );
-  await suggest(page, { action: "raise", amount: 12, confidence: 0.8 });
+  await suggest(page, {
+    action: "raise",
+    amount: 12,
+    stateVersion: initialSituation.stateVersion,
+    confidence: 0.8,
+  });
   await page
     .getByRole("button", { name: /Raise to 12.*WebMCP tools ready/ })
     .click();
