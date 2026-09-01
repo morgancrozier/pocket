@@ -9,6 +9,8 @@ import type {
   AgentSuggestion,
   HandActionEvent,
   PokerSituation,
+  RoomPhase,
+  RoomViewerStatus,
 } from "@/types/poker";
 
 export type WebMCPSupportState = "checking" | "available" | "unavailable" | "error";
@@ -17,6 +19,10 @@ interface UsePokerToolsInput {
   situation: PokerSituation | null;
   handHistory: HandActionEvent[];
   onSuggestion: (suggestion: AgentSuggestion) => void;
+  roomPhase?: RoomPhase;
+  viewerStatus?: RoomViewerStatus;
+  observedRevision?: number;
+  isRevisionCurrent?: () => boolean;
 }
 
 function hasWebMCP(): boolean {
@@ -31,6 +37,10 @@ export function usePokerTools({
   situation,
   handHistory,
   onSuggestion,
+  roomPhase,
+  viewerStatus = "seated",
+  observedRevision,
+  isRevisionCurrent,
 }: UsePokerToolsInput) {
   const [supportState, setSupportState] = useState<WebMCPSupportState>("checking");
   const [registrationError, setRegistrationError] = useState<string | null>(null);
@@ -38,15 +48,23 @@ export function usePokerTools({
   const situationRef = useRef(situation);
   const historyRef = useRef(handHistory);
   const suggestionHandlerRef = useRef(onSuggestion);
+  const revisionCurrentRef = useRef(isRevisionCurrent);
 
   situationRef.current = situation;
   historyRef.current = handHistory;
   suggestionHandlerRef.current = onSuggestion;
+  revisionCurrentRef.current = isRevisionCurrent;
 
   const hasSituation = situation !== null;
   const isYourTurn = situation?.isYourTurn ?? false;
+  const isTerminal = Boolean(situation?.gameResult);
   const handNumber = situation?.handNumber;
   const stateVersion = situation?.stateVersion;
+  const canSuggest =
+    (observedRevision === undefined ||
+      (stateVersion !== undefined && stateVersion >= observedRevision)) &&
+    viewerStatus === "seated" &&
+    (roomPhase === undefined || roomPhase === "active");
 
   useEffect(() => {
     if (!hasSituation) {
@@ -68,6 +86,10 @@ export function usePokerTools({
         const tools = createReadPokerTools({
           getSituation: () => situationRef.current,
           getHandHistory: () => historyRef.current,
+          getRoomContext: () =>
+            roomPhase
+              ? { roomPhase, viewerStatus }
+              : null,
         });
 
         for (const tool of tools) {
@@ -98,10 +120,16 @@ export function usePokerTools({
       active = false;
       controller.abort();
     };
-  }, [hasSituation]);
+  }, [hasSituation, roomPhase, viewerStatus]);
 
   useEffect(() => {
-    if (!hasSituation || !isYourTurn || !hasWebMCP()) {
+    if (
+      !hasSituation ||
+      !isYourTurn ||
+      isTerminal ||
+      !canSuggest ||
+      !hasWebMCP()
+    ) {
       return;
     }
 
@@ -114,6 +142,7 @@ export function usePokerTools({
           getSituation: () => situationRef.current,
           onSuggestion: (suggestion) =>
             suggestionHandlerRef.current(suggestion),
+          isRevisionCurrent: () => revisionCurrentRef.current?.() ?? true,
         });
 
         await document.modelContext.registerTool(tool, {
@@ -135,7 +164,15 @@ export function usePokerTools({
       active = false;
       controller.abort();
     };
-  }, [hasSituation, isYourTurn, handNumber, stateVersion]);
+  }, [
+    canSuggest,
+    hasSituation,
+    isYourTurn,
+    isTerminal,
+    handNumber,
+    observedRevision,
+    stateVersion,
+  ]);
 
   return {
     supportState,

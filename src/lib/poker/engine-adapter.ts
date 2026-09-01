@@ -17,9 +17,11 @@ import {
   type TableCommand,
   type TableConfig,
   type TableState,
+  type TableView,
 } from "@hivetech/poker-engine";
 import type {
   Card,
+  GameResult,
   HandActionEvent,
   HandResult,
   LegalAction,
@@ -101,6 +103,7 @@ interface AuthoritativeEnvelope {
   readonly engine: typeof ENGINE_ID;
   readonly gameId: string;
   readonly version: number;
+  readonly versionOffset: number;
   readonly config: TableConfig;
   readonly players: readonly DemoPlayerDefinition[];
   readonly commands: readonly TableCommand[];
@@ -116,6 +119,24 @@ interface CreateAuthoritativeGameInput {
   readonly gameId: string;
   readonly players: readonly DemoPlayerDefinition[];
   readonly deterministicSeed?: number;
+  readonly versionOffset?: number;
+}
+
+export interface AuthoritativeTableSummary {
+  readonly handNumber: number;
+  readonly handSettled: boolean;
+  readonly currentActorId: string | null;
+  readonly players: readonly {
+    readonly playerId: string;
+    readonly stack: number;
+    readonly inCurrentHand: boolean;
+  }[];
+}
+
+interface StartNextAuthoritativeHandOptions {
+  readonly deterministicSeed?: number;
+  readonly smallBlind?: number;
+  readonly bigBlind?: number;
 }
 
 const FORBIDDEN_PROJECTION_KEYS = new Set([
@@ -276,13 +297,22 @@ function parseEnvelope(serialized: string): AuthoritativeEnvelope {
 
   const players = parsePlayerDefinitions(parsed.players);
   const commands = parsed.commands as TableCommand[];
+  const versionOffset: unknown =
+    parsed.versionOffset === undefined ? 0 : parsed.versionOffset;
+  if (
+    typeof versionOffset !== "number" ||
+    !Number.isSafeInteger(versionOffset) ||
+    versionOffset < 0
+  ) {
+    throw invalidState("The authoritative version offset is invalid.");
+  }
   const countedVersion = commands.filter(
     (command) =>
       isRecord(command) &&
       (command.type === "start-hand" || command.type === "act"),
   ).length;
 
-  if (countedVersion !== parsed.version) {
+  if (versionOffset + countedVersion !== parsed.version) {
     throw invalidState("The authoritative state version does not match its command log.");
   }
   if (commands.length < players.length + 1) {
@@ -309,7 +339,9 @@ function parseEnvelope(serialized: string): AuthoritativeEnvelope {
   for (const command of commands.slice(players.length)) {
     if (
       !isRecord(command) ||
-      (command.type !== "start-hand" && command.type !== "act")
+      (command.type !== "start-hand" &&
+        command.type !== "act" &&
+        command.type !== "set-forced-bets")
     ) {
       throw invalidState("The authoritative command log contains an unsupported command.");
     }
@@ -320,6 +352,7 @@ function parseEnvelope(serialized: string): AuthoritativeEnvelope {
     engine: ENGINE_ID,
     gameId: parsed.gameId,
     version: Number(parsed.version),
+    versionOffset,
     config: { ...TABLE_CONFIG },
     players,
     commands,
@@ -509,21 +542,34 @@ function mapHandHistory(
 
 function projectPlayers(
   game: ReconstructedGame,
+  safeTable: TableView,
 ): PublicPlayerView[] {
-  const hand = game.state.hand;
+  const hand = safeTable.hand;
 
   return game.envelope.players.map((definition) => {
-    const seat = game.state.seats[definition.seat];
+    const seat = safeTable.seats[definition.seat];
     const participant = hand?.players.find(
       (candidate) => candidate.playerId === definition.id,
     );
-    const status: PublicPlayerView["status"] = !participant
-      ? "waiting"
-      : participant.folded
-        ? "folded"
-        : participant.allIn
-          ? "all-in"
-          : "active";
+    const status: PublicPlayerView["status"] =
+      seat?.stack === 0 && hand?.stage === "complete"
+        ? "out"
+        : !participant
+          ? seat?.stack === 0
+            ? "out"
+            : "waiting"
+          : participant.folded
+            ? "folded"
+            : participant.allIn
+              ? "all-in"
+              : "active";
+    const revealedCards =
+      hand?.stage === "complete" &&
+      hand.completionReason === "showdown" &&
+      participant?.folded === false &&
+      participant?.holeCards
+        ? participant.holeCards.map(pocketCard)
+        : undefined;
 
     return {
       id: definition.id,
@@ -534,8 +580,28 @@ function projectPlayers(
       committedThisStreet: participant?.committedStreet ?? 0,
       isBot: definition.isBot,
       hasAgent: definition.hasAgent,
+      ...(revealedCards ? { revealedCards } : {}),
     };
   });
+}
+
+function projectGameResult(
+  safeTable: TableView,
+  viewerId: string,
+): GameResult | null {
+  if (safeTable.hand?.stage !== "complete") return null;
+
+  const viewerSeat = safeTable.seats.find((seat) => seat?.playerId === viewerId);
+  if (!viewerSeat || viewerSeat.stack === 0) {
+    return { outcome: "lost", reason: "human-eliminated" };
+  }
+
+  const fundedPlayers = safeTable.seats.filter(
+    (seat): seat is NonNullable<typeof seat> => Boolean(seat && seat.stack > 0),
+  );
+  return fundedPlayers.length === 1 && fundedPlayers[0]?.playerId === viewerId
+    ? { outcome: "won", reason: "last-player-standing" }
+    : null;
 }
 
 function projectHandResult(game: ReconstructedGame): HandResult | null {
@@ -621,9 +687,33 @@ export function createAuthoritativeGame({
   gameId,
   players,
   deterministicSeed,
+  versionOffset = 0,
 }: CreateAuthoritativeGameInput): AuthoritativePokerState {
+  return createAuthoritativeGameWithVersion({
+    gameId,
+    players,
+    deterministicSeed,
+    versionOffset,
+  });
+}
+
+function createAuthoritativeGameWithVersion({
+  gameId,
+  players,
+  deterministicSeed,
+  versionOffset,
+}: CreateAuthoritativeGameInput & {
+  readonly versionOffset: number;
+}): AuthoritativePokerState {
   if (typeof gameId !== "string" || gameId.trim().length === 0) {
     throw invalidState("A game requires a non-empty id.");
+  }
+  if (
+    !Number.isSafeInteger(versionOffset) ||
+    versionOffset < 0 ||
+    !Number.isSafeInteger(versionOffset + 1)
+  ) {
+    throw invalidState("A game requires a non-negative safe version offset.");
   }
 
   const normalizedPlayers = normalizePlayers(players);
@@ -661,7 +751,8 @@ export function createAuthoritativeGame({
     envelopeVersion: ENVELOPE_VERSION,
     engine: ENGINE_ID,
     gameId,
-    version: 1,
+    version: versionOffset + 1,
+    versionOffset,
     config: { ...TABLE_CONFIG },
     players: normalizedPlayers,
     commands,
@@ -686,6 +777,26 @@ export function restoreAuthoritativeGame(
 
 export function getAuthoritativeVersion(state: AuthoritativePokerState): number {
   return reconstruct(state).envelope.version;
+}
+
+export function getAuthoritativeTableSummary(
+  state: AuthoritativePokerState,
+): AuthoritativeTableSummary {
+  const game = reconstruct(state);
+  return {
+    handNumber: game.state.handNumber,
+    handSettled: game.state.hand?.stage === "complete",
+    currentActorId: currentActorId(game.state),
+    players: game.envelope.players.map((player) => ({
+      playerId: player.id,
+      stack: game.state.seats[player.seat]?.stack ?? 0,
+      inCurrentHand: Boolean(
+        game.state.hand?.players.some(
+          (participant) => participant.playerId === player.id,
+        ),
+      ),
+    })),
+  };
 }
 
 export function getCurrentDecision(
@@ -731,23 +842,56 @@ export function applyAuthoritativeAction(
 
 export function startNextAuthoritativeHand(
   authoritative: AuthoritativePokerState,
-  deterministicSeed?: number,
+  options: StartNextAuthoritativeHandOptions = {},
 ): AuthoritativePokerState {
   const game = reconstruct(authoritative);
+  const commands: TableCommand[] = [];
+  const smallBlind = options.smallBlind ?? game.state.config.smallBlind;
+  const bigBlind = options.bigBlind ?? game.state.config.bigBlind;
+  if (
+    smallBlind !== game.state.config.smallBlind ||
+    bigBlind !== game.state.config.bigBlind
+  ) {
+    const forcedBetsCommand: TableCommand = {
+      type: "set-forced-bets",
+      smallBlind,
+      bigBlind,
+      ante: { mode: "none", amount: 0 },
+    };
+    ensureTransition(game.state, forcedBetsCommand);
+    commands.push(forcedBetsCommand);
+  }
   const command: TableCommand = {
     type: "start-hand",
-    deck: deckForHand(deterministicSeed),
+    deck: deckForHand(options.deterministicSeed),
   };
-
-  ensureTransition(game.state, command);
+  const beforeStart = commands.reduce(
+    (state, nextCommand) => ensureTransition(state, nextCommand).state,
+    game.state,
+  );
+  ensureTransition(beforeStart, command);
 
   const next = encodeEnvelope({
     ...game.envelope,
     version: game.envelope.version + 1,
-    commands: [...game.envelope.commands, command],
+    commands: [...game.envelope.commands, ...commands, command],
   });
   reconstruct(next);
   return next;
+}
+
+export function restartAuthoritativeGame(
+  authoritative: AuthoritativePokerState,
+  players: readonly DemoPlayerDefinition[],
+  deterministicSeed?: number,
+): AuthoritativePokerState {
+  const game = reconstruct(authoritative);
+  return createAuthoritativeGameWithVersion({
+    gameId: game.envelope.gameId,
+    players,
+    deterministicSeed,
+    versionOffset: game.envelope.version,
+  });
 }
 
 export function projectAuthoritativeGame(
@@ -806,15 +950,79 @@ export function projectAuthoritativeGame(
           ),
     currentBet: hand.currentBet,
     toCall: Math.max(0, hand.currentBet - viewerHand.committedStreet),
+    smallBlind: safeTable.config.smallBlind,
+    bigBlind: safeTable.config.bigBlind,
     dealerSeat: hand.buttonSeat,
     legalActions,
-    players: projectPlayers(game),
+    players: projectPlayers(game, safeTable),
     recentActions: mapHandHistory(
       safeEvents,
       safeTable.handNumber,
       game.envelope.players,
     ),
     handResult: projectHandResult(game),
+    gameResult: projectGameResult(safeTable, viewerId),
+  };
+}
+
+/**
+ * An eliminated room member remains bound to their original seat but receives
+ * the engine's spectator projection: no private hand and no legal actions.
+ */
+export function projectAuthoritativeSpectatorGame(
+  authoritative: AuthoritativePokerState,
+  viewerId: string,
+): PokerSituation {
+  const game = reconstruct(authoritative);
+  const viewer = game.envelope.players.find((player) => player.id === viewerId);
+  if (!viewer) {
+    throw new EngineAdapterError(
+      "UNKNOWN_PLAYER",
+      "The spectator is not a member of this game.",
+    );
+  }
+
+  const safeTable = projectTable(game.state, { kind: "spectator" });
+  const safeEvents = projectEvents(game.events, { kind: "spectator" });
+  const hand = safeTable.hand;
+  const viewerSeat = safeTable.seats[viewer.seat];
+  if (!hand || !viewerSeat || viewerSeat.playerId !== viewerId) {
+    throw invalidState("The eliminated viewer's seat is unavailable.");
+  }
+
+  return {
+    gameId: game.envelope.gameId,
+    handNumber: safeTable.handNumber,
+    stateVersion: game.envelope.version,
+    street: hand.stage === "complete" ? "showdown" : hand.stage,
+    isYourTurn: false,
+    currentActorId: currentActorId(game.state),
+    yourPlayerId: viewerId,
+    yourSeat: viewer.seat,
+    yourCards: [],
+    yourStack: viewerSeat.stack,
+    board: hand.communityCards.map(pocketCard),
+    pot:
+      hand.stage === "complete"
+        ? hand.pots.reduce((total, pot) => total + pot.amount, 0)
+        : hand.players.reduce(
+            (total, player) => total + player.committedHand,
+            0,
+          ),
+    currentBet: hand.currentBet,
+    toCall: 0,
+    smallBlind: safeTable.config.smallBlind,
+    bigBlind: safeTable.config.bigBlind,
+    dealerSeat: hand.buttonSeat,
+    legalActions: [],
+    players: projectPlayers(game, safeTable),
+    recentActions: mapHandHistory(
+      safeEvents,
+      safeTable.handNumber,
+      game.envelope.players,
+    ),
+    handResult: projectHandResult(game),
+    gameResult: projectGameResult(safeTable, viewerId),
   };
 }
 
@@ -858,9 +1066,8 @@ export function isSerializedPokerSituationPrivate(
       return false;
     }
 
-    const expected = JSON.parse(
-      JSON.stringify(projectAuthoritativeGame(authoritative, viewerId)),
-    ) as unknown;
+    const safeSituation = projectAuthoritativeGame(authoritative, viewerId);
+    const expected = JSON.parse(JSON.stringify(safeSituation)) as unknown;
     if (canonicalJson(parsed) !== canonicalJson(expected)) {
       return false;
     }
@@ -877,7 +1084,13 @@ export function isSerializedPokerSituationPrivate(
       ...hand.deck,
       ...hand.burnCards,
       ...hand.players
-        .filter((player) => player.playerId !== viewerId)
+        .filter((player) => {
+          if (player.playerId === viewerId) return false;
+          const projectedPlayer = safeSituation.players.find(
+            (candidate) => candidate.id === player.playerId,
+          );
+          return !projectedPlayer?.revealedCards?.length;
+        })
         .flatMap((player) => player.holeCards),
     ];
 

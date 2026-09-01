@@ -4,6 +4,8 @@ import type {
   HandActionEvent,
   PokerActionType,
   PokerSituation,
+  RoomPhase,
+  RoomViewerStatus,
 } from "@/types/poker";
 
 export const RECOMMENDATION_ACTIONS = [
@@ -19,6 +21,10 @@ export const SUGGESTION_CONFIRMATION_MESSAGE =
 
 interface SituationToolContext {
   getSituation: () => PokerSituation | null;
+  getRoomContext?: () => {
+    roomPhase: RoomPhase;
+    viewerStatus: RoomViewerStatus;
+  } | null;
 }
 
 interface HandHistoryToolContext extends SituationToolContext {
@@ -27,6 +33,7 @@ interface HandHistoryToolContext extends SituationToolContext {
 
 interface SuggestionToolContext extends SituationToolContext {
   onSuggestion: (suggestion: AgentSuggestion) => void;
+  isRevisionCurrent?: () => boolean;
 }
 
 function requireSituation(
@@ -55,6 +62,7 @@ function optionalFiniteNumber(value: unknown): number | undefined {
 
 export function createCurrentSituationTool({
   getSituation,
+  getRoomContext,
 }: SituationToolContext): WebMCPTool {
   return {
     name: "get_current_situation",
@@ -69,13 +77,18 @@ export function createCurrentSituationTool({
       readOnlyHint: true,
       untrustedContentHint: true,
     },
-    execute: async () => JSON.stringify(requireSituation(getSituation)),
+    execute: async () => {
+      const situation = requireSituation(getSituation);
+      const room = getRoomContext?.();
+      return JSON.stringify(room ? { ...situation, ...room } : situation);
+    },
   };
 }
 
 export function createHandHistoryTool({
   getSituation,
   getHandHistory,
+  getRoomContext,
 }: HandHistoryToolContext): WebMCPTool {
   return {
     name: "get_hand_history",
@@ -92,12 +105,23 @@ export function createHandHistoryTool({
     },
     execute: async () => {
       const situation = requireSituation(getSituation);
+      const room = getRoomContext?.();
 
       return JSON.stringify({
         gameId: situation.gameId,
         handNumber: situation.handNumber,
         stateVersion: situation.stateVersion,
+        board: situation.board,
+        handResult: situation.handResult,
+        revealedHands: situation.players
+          .filter((player) => player.revealedCards?.length)
+          .map((player) => ({
+            playerId: player.id,
+            playerName: player.displayName,
+            cards: player.revealedCards,
+          })),
         actions: getHandHistory(),
+        ...(room ?? {}),
       });
     },
   };
@@ -115,6 +139,7 @@ export function createReadPokerTools(
 export function createSuggestActionTool({
   getSituation,
   onSuggestion,
+  isRevisionCurrent,
 }: SuggestionToolContext): WebMCPTool {
   const registeredSituation = requireSituation(getSituation);
   const registeredHandNumber = registeredSituation.handNumber;
@@ -154,7 +179,18 @@ export function createSuggestActionTool({
       untrustedContentHint: false,
     },
     execute: async (input) => {
+      if (isRevisionCurrent && !isRevisionCurrent()) {
+        throw new Error(
+          "This recommendation target is stale. Re-read get_current_situation because the table has changed.",
+        );
+      }
       const current = requireSituation(getSituation);
+
+      if (current.gameResult) {
+        throw new Error(
+          "The tournament is complete. suggest_action is unavailable until the human starts a new game.",
+        );
+      }
 
       if (
         current.handNumber !== registeredHandNumber ||

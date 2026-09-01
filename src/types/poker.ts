@@ -32,10 +32,11 @@ export interface PublicPlayerView {
   displayName: string;
   seat: number;
   stack: number;
-  status: "active" | "folded" | "all-in" | "waiting";
+  status: "active" | "folded" | "all-in" | "waiting" | "out";
   committedThisStreet: number;
   isBot: boolean;
   hasAgent: boolean;
+  revealedCards?: Card[];
 }
 
 export interface HandActionEvent {
@@ -62,11 +63,14 @@ export interface PokerSituation {
   pot: number;
   currentBet: number;
   toCall: number;
+  smallBlind: number;
+  bigBlind: number;
   dealerSeat: number;
   legalActions: LegalAction[];
   players: PublicPlayerView[];
   recentActions: HandActionEvent[];
   handResult: HandResult | null;
+  gameResult: GameResult | null;
 }
 
 export interface HandResult {
@@ -77,6 +81,16 @@ export interface HandResult {
     amount: number;
   }>;
 }
+
+export type GameResult =
+  | {
+      outcome: "won";
+      reason: "last-player-standing";
+    }
+  | {
+      outcome: "lost";
+      reason: "human-eliminated";
+    };
 
 export interface PokerActionIntent {
   action: PokerActionType;
@@ -117,4 +131,60 @@ export interface SafeGameProjection {
   street: PokerStreet;
   board: Card[];
   players: SafePlayerProjection[];
+}
+
+export type RoomPhase = "waiting" | "active" | "complete";
+export type RoomViewerStatus = "seated" | "eliminated";
+
+export interface RoomViewer {
+  playerId: string;
+  seat: number;
+  displayName: string;
+  isOwner: boolean;
+  status: RoomViewerStatus;
+}
+
+export interface RoomSeat {
+  playerId: string;
+  displayName: string;
+  seat: number;
+  isBot: boolean;
+  isYou: boolean;
+  status: PublicPlayerView["status"];
+  stack: number | null;
+}
+
+export interface RoomResult {
+  reason: "last-player-standing" | "all-humans-eliminated";
+  winnerPlayerId: string | null;
+}
+
+interface RoomSnapshotBase {
+  gameId: string;
+  roomCode: string;
+  revision: number;
+  viewer: RoomViewer;
+  seats: RoomSeat[];
+}
+
+export interface WaitingRoomSnapshot extends RoomSnapshotBase {
+  phase: "waiting";
+  canStart: boolean;
+}
+
+export interface PlayingRoomSnapshot extends RoomSnapshotBase {
+  phase: "active" | "complete";
+  situation: PokerSituation;
+  result: RoomResult | null;
+}
+
+export type RoomSnapshot = WaitingRoomSnapshot | PlayingRoomSnapshot;
+
+export interface RoomOperationResult {
+  room: RoomSnapshot;
+  operation: {
+    id: string;
+    status: "accepted" | "replayed";
+    resultRevision: number;
+  };
 }

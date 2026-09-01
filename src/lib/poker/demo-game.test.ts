@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDemoGame, DEMO_HERO_ID } from "./demo-game";
 
-describe("Gate 1 demo game", () => {
+describe("Gate 2 demo game", () => {
   it("settles a complete human-and-bot hand with chips conserved", async () => {
     const game = createDemoGame({ deterministicSeed: 42 });
     const initialTotal = await game.getChipTotal();
@@ -28,7 +28,7 @@ describe("Gate 1 demo game", () => {
     expect(situation.currentActorId).toBeNull();
     expect(situation.legalActions).toEqual([]);
     expect(await game.getChipTotal()).toBe(initialTotal);
-    expect(initialTotal).toBe(800);
+    expect(initialTotal).toBe(160);
   });
 
   it("rejects out-of-turn, illegal, and stale human requests without mutation", async () => {
@@ -94,7 +94,7 @@ describe("Gate 1 demo game", () => {
         actorId: DEMO_HERO_ID,
         expectedStateVersion: settled.stateVersion,
       }),
-    ).rejects.toMatchObject({ code: "INVALID_STATE" });
+    ).rejects.toMatchObject({ code: "GAME_COMPLETE" });
     expect(await game.getSituation(DEMO_HERO_ID)).toEqual(settled);
   });
 });

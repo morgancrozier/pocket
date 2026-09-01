@@ -25,6 +25,8 @@ function createSituation(
     pot: 68,
     currentBet: 44,
     toCall: 32,
+    smallBlind: 1,
+    bigBlind: 2,
     dealerSeat: 0,
     legalActions: [
       { type: "fold" },
@@ -64,6 +66,7 @@ function createSituation(
       },
     ],
     handResult: null,
+    gameResult: null,
     ...overrides,
   };
 }
@@ -152,6 +155,22 @@ describe("createSuggestActionTool", () => {
     expect(onSuggestion).not.toHaveBeenCalled();
   });
 
+  it("rejects a recommendation as soon as a newer revision is signaled", async () => {
+    const situation = createSituation();
+    const onSuggestion = vi.fn();
+    let revisionIsCurrent = true;
+    const tool = createSuggestActionTool({
+      getSituation: () => situation,
+      onSuggestion,
+      isRevisionCurrent: () => revisionIsCurrent,
+    });
+
+    revisionIsCurrent = false;
+
+    await expect(tool.execute({ action: "call" })).rejects.toThrow("stale");
+    expect(onSuggestion).not.toHaveBeenCalled();
+  });
+
   it("rejects a recommendation when it is no longer the hero's turn", async () => {
     let situation = createSituation();
     const onSuggestion = vi.fn();
@@ -171,6 +190,29 @@ describe("createSuggestActionTool", () => {
     );
     expect(onSuggestion).not.toHaveBeenCalled();
   });
+
+  it("rejects recommendations after a terminal result or restart revision", async () => {
+    let situation = createSituation();
+    const onSuggestion = vi.fn();
+    const tool = createSuggestActionTool({
+      getSituation: () => situation,
+      onSuggestion,
+    });
+
+    situation = createSituation({
+      handNumber: 1,
+      stateVersion: 30,
+      isYourTurn: false,
+      currentActorId: null,
+      legalActions: [],
+      gameResult: { outcome: "won", reason: "last-player-standing" },
+    });
+    await expect(tool.execute({ action: "check" })).rejects.toThrow("complete");
+
+    situation = createSituation({ handNumber: 1, stateVersion: 31 });
+    await expect(tool.execute({ action: "call" })).rejects.toThrow("stale");
+    expect(onSuggestion).not.toHaveBeenCalled();
+  });
 });
 
 describe("Poker WebMCP definitions", () => {
@@ -185,6 +227,18 @@ describe("Poker WebMCP definitions", () => {
     situation = createSituation({
       stateVersion: 5,
       pot: 148,
+      board: ["Ah", "9s", "4c", "7d", "2h"],
+      handResult: {
+        reason: "showdown",
+        winners: [{ playerId: "hero", playerName: "Morgan", amount: 148 }],
+      },
+      players: [
+        ...createSituation().players.slice(0, 1),
+        {
+          ...createSituation().players[1]!,
+          revealedCards: ["Kh", "Kd"],
+        },
+      ],
     });
     history = [
       ...situation.recentActions,
@@ -204,6 +258,15 @@ describe("Poker WebMCP definitions", () => {
     });
     expect(JSON.parse(await historyTool.execute({}))).toMatchObject({
       stateVersion: 5,
+      board: ["Ah", "9s", "4c", "7d", "2h"],
+      handResult: situation.handResult,
+      revealedHands: [
+        {
+          playerId: "bot-1",
+          playerName: "June",
+          cards: ["Kh", "Kd"],
+        },
+      ],
       actions: history,
     });
 
@@ -250,5 +313,39 @@ describe("Poker WebMCP definitions", () => {
     };
     expect(actionSchema.enum).toEqual(RECOMMENDATION_ACTIONS);
     expect(actionSchema.enum).not.toContain("all_in");
+  });
+
+  it("marks eliminated read output as spectator-safe without restoring advice", async () => {
+    const situation = createSituation({
+      yourCards: [],
+      legalActions: [],
+      isYourTurn: false,
+      currentActorId: "bot-1",
+    });
+    const [situationTool, historyTool] = createReadPokerTools({
+      getSituation: () => situation,
+      getHandHistory: () => situation.recentActions,
+      getRoomContext: () => ({
+        roomPhase: "active",
+        viewerStatus: "eliminated",
+      }),
+    });
+
+    expect(JSON.parse(await situationTool.execute({}))).toMatchObject({
+      roomPhase: "active",
+      viewerStatus: "eliminated",
+      yourCards: [],
+      legalActions: [],
+      isYourTurn: false,
+    });
+    expect(JSON.parse(await historyTool.execute({}))).toMatchObject({
+      roomPhase: "active",
+      viewerStatus: "eliminated",
+      actions: situation.recentActions,
+    });
+    expect([situationTool.name, historyTool.name]).toEqual([
+      "get_current_situation",
+      "get_hand_history",
+    ]);
   });
 });

@@ -18,6 +18,8 @@ export const nextHandRequestSchema = z
   })
   .strict();
 
+export const restartRequestSchema = nextHandRequestSchema;
+
 export function invalidRequestResponse() {
   return NextResponse.json(
     {

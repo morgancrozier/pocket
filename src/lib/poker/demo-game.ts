@@ -14,6 +14,7 @@ import {
   getAuthoritativeVersion,
   getCurrentDecision,
   projectAuthoritativeGame,
+  restartAuthoritativeGame,
   restoreAuthoritativeGame,
   serializeAuthoritativeGame,
   startNextAuthoritativeHand,
@@ -33,7 +34,7 @@ export const DEMO_PLAYERS: readonly DemoPlayerDefinition[] = [
     id: DEMO_HERO_ID,
     displayName: "Morgan",
     seat: 0,
-    stack: 200,
+    stack: 40,
     isBot: false,
     hasAgent: true,
   },
@@ -41,7 +42,7 @@ export const DEMO_PLAYERS: readonly DemoPlayerDefinition[] = [
     id: "bot-east",
     displayName: "Alex",
     seat: 1,
-    stack: 200,
+    stack: 40,
     isBot: true,
     hasAgent: false,
   },
@@ -49,7 +50,7 @@ export const DEMO_PLAYERS: readonly DemoPlayerDefinition[] = [
     id: "bot-north",
     displayName: "June",
     seat: 2,
-    stack: 200,
+    stack: 40,
     isBot: true,
     hasAgent: false,
   },
@@ -57,13 +58,15 @@ export const DEMO_PLAYERS: readonly DemoPlayerDefinition[] = [
     id: "bot-west",
     displayName: "Theo",
     seat: 3,
-    stack: 200,
+    stack: 40,
     isBot: true,
     hasAgent: false,
   },
 ];
 
 export type DemoGameErrorCode =
+  | "GAME_COMPLETE"
+  | "GAME_IN_PROGRESS"
   | "HAND_IN_PROGRESS"
   | "ILLEGAL_ACTION"
   | "INVALID_STATE"
@@ -92,6 +95,10 @@ export interface DemoGameService {
     actorId: string;
     expectedStateVersion: number;
   }): Promise<PokerSituation>;
+  restartGame(input: {
+    actorId: string;
+    expectedStateVersion: number;
+  }): Promise<PokerSituation>;
   getChipTotal(): Promise<number>;
 }
 
@@ -102,6 +109,15 @@ interface CreateDemoGameOptions {
   now?: () => number;
   claimIdFactory?: () => string;
   chooseBotIntent?: (decision: ServerPokerDecision) => PokerActionIntent;
+}
+
+export function blindLevelForHand(handNumber: number): {
+  smallBlind: number;
+  bigBlind: number;
+} {
+  if (handNumber >= 7) return { smallBlind: 4, bigBlind: 8 };
+  if (handNumber >= 4) return { smallBlind: 2, bigBlind: 4 };
+  return { smallBlind: 1, bigBlind: 2 };
 }
 
 function ensureKnownPlayer(playerId: string): DemoPlayerDefinition {
@@ -341,19 +357,48 @@ export function createDemoGame(
             authoritative,
             actorId,
           );
-          if (settledSituation.yourStack <= 0) {
+          if (settledSituation.gameResult) {
             throw new DemoGameError(
-              "INVALID_STATE",
-              "The demo is complete because the human has no chips left.",
+              "GAME_COMPLETE",
+              "The tournament is complete. Start a new game to continue.",
             );
           }
 
+          const nextHandNumber = decision.handNumber + 1;
           const seed =
             typeof options.deterministicSeed === "number"
               ? options.deterministicSeed + decision.handNumber
               : undefined;
-          const next = startNextAuthoritativeHand(authoritative, seed);
+          const next = startNextAuthoritativeHand(authoritative, {
+            deterministicSeed: seed,
+            ...blindLevelForHand(nextHandNumber),
+          });
           return runBotsUntilHeroOrSettlement(next, chooseBotIntent);
+        },
+        actorId,
+      );
+    },
+
+    async restartGame({ actorId, expectedStateVersion }) {
+      ensureKnownPlayer(actorId);
+
+      return mutate(
+        expectedStateVersion,
+        (authoritative) => {
+          const situation = projectAuthoritativeGame(authoritative, actorId);
+          if (!situation.gameResult) {
+            throw new DemoGameError(
+              "GAME_IN_PROGRESS",
+              "The current tournament must finish before it can restart.",
+            );
+          }
+
+          const restarted = restartAuthoritativeGame(
+            authoritative,
+            DEMO_PLAYERS,
+            options.deterministicSeed,
+          );
+          return runBotsUntilHeroOrSettlement(restarted, chooseBotIntent);
         },
         actorId,
       );

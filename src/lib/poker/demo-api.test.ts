@@ -3,6 +3,7 @@ import {
   actionRequestSchema,
   demoApiErrorResponse,
   nextHandRequestSchema,
+  restartRequestSchema,
 } from "./demo-api";
 import { DemoGameError } from "./demo-game";
 import { DemoStorageError } from "./demo-game-repository";
@@ -33,6 +34,15 @@ describe("demo action request contract", () => {
         playerId: "hero",
       }).success,
     ).toBe(false);
+    expect(
+      restartRequestSchema.safeParse({
+        expectedStateVersion: 2,
+        action: "restart",
+      }).success,
+    ).toBe(false);
+    expect(
+      restartRequestSchema.safeParse({ expectedStateVersion: 2 }).success,
+    ).toBe(true);
   });
 
   it("returns bounded conflict, storage, and expired-session errors", async () => {

@@ -7,7 +7,6 @@ import { PlayerSeat } from "@/components/poker/PlayerSeat";
 import { PlayingCard } from "@/components/poker/PlayingCard";
 import {
   advanceMockStreet,
-  amountForLegalAction,
   appendEvent,
   describeAction,
   INITIAL_SITUATION,
@@ -17,11 +16,20 @@ import {
   nextMockLegalActions,
 } from "@/lib/poker/mock-state";
 import {
+  createRecommendationReceipt,
+  isRecommendationReceiptCurrent,
+  RECOMMENDATION_RECEIPT_STORAGE_KEY,
+  restoreRecommendationReceipt,
+  serializeRecommendationReceipt,
+  type RecommendationReceipt,
+} from "@/lib/poker/recommendation-receipt";
+import {
   AGENT_SUGGESTION_STORAGE_KEY,
   isSuggestionCurrent,
   restoreStoredSuggestion,
   serializeStoredSuggestion,
 } from "@/lib/poker/suggestion-storage";
+import { ensureSupabaseBrowserIdentity } from "@/lib/supabase/client";
 import {
   usePokerTools,
   type WebMCPSupportState,
@@ -46,17 +54,17 @@ function actionLabel(action: PokerSituation["legalActions"][number]) {
   }
 
   if ((action.type === "bet" || action.type === "raise") && action.min) {
-    return `${label} to ${action.min}`;
+    return label;
   }
 
   return label;
 }
 
 function supportLabel(supportState: WebMCPSupportState): string {
-  if (supportState === "available") return "Copilot ready";
-  if (supportState === "unavailable") return "Copilot not connected";
-  if (supportState === "error") return "Copilot connection issue";
-  return "Connecting copilot";
+  if (supportState === "available") return "WebMCP ready";
+  if (supportState === "unavailable") return "WebMCP unavailable";
+  if (supportState === "error") return "WebMCP needs attention";
+  return "Preparing WebMCP";
 }
 
 function PocketHeader({
@@ -79,7 +87,7 @@ function PocketHeader({
         </span>
         <span className="trust-line">
           {situation
-            ? `Play money · Hand ${situation.handNumber}`
+            ? `Play money · Blinds ${situation.smallBlind}/${situation.bigBlind} · Hand ${situation.handNumber}`
             : "Your agent advises. You play."}
         </span>
       </div>
@@ -93,6 +101,8 @@ function isPokerSituation(value: unknown): value is PokerSituation {
   return (
     typeof candidate.gameId === "string" &&
     typeof candidate.stateVersion === "number" &&
+    typeof candidate.smallBlind === "number" &&
+    typeof candidate.bigBlind === "number" &&
     Array.isArray(candidate.players) &&
     Array.isArray(candidate.yourCards) &&
     Array.isArray(candidate.legalActions)
@@ -135,6 +145,12 @@ async function requestSituation(
 }
 
 function resultMessage(situation: PokerSituation): string {
+  if (situation.gameResult?.outcome === "won") {
+    return "You won the table. Every opponent is out.";
+  }
+  if (situation.gameResult?.outcome === "lost") {
+    return "You’re out. The tournament ends here.";
+  }
   if (!situation.handResult) return "The bots acted. Your turn again.";
   const winners = situation.handResult.winners
     .map((winner) => `${winner.playerName} won ${winner.amount}`)
@@ -142,14 +158,34 @@ function resultMessage(situation: PokerSituation): string {
   return winners || "The hand settled.";
 }
 
+function actionPendingMessage(
+  action: PokerActionType,
+  amount: number | undefined,
+  receipt: RecommendationReceipt | null,
+): string {
+  const humanChoice = describeAction(action, amount);
+  if (!receipt) return `You chose ${humanChoice}. The bots are responding…`;
+  if (receipt.outcome === "followed") {
+    return `You followed your copilot: ${humanChoice}. The bots are responding…`;
+  }
+
+  return `You chose ${humanChoice} instead of ${describeAction(receipt.recommendation.action, receipt.recommendation.amount)}. The bots are responding…`;
+}
+
 export function PocketPrototype() {
   const [situation, setSituation] = useState<PokerSituation | null>(null);
   const [mode, setMode] = useState<DemoMode>("loading");
   const [suggestion, setSuggestion] = useState<AgentSuggestion | null>(null);
+  const [recommendationReceipt, setRecommendationReceipt] =
+    useState<RecommendationReceipt | null>(null);
+  const [suggestionPresentationRevision, setSuggestionPresentationRevision] =
+    useState(0);
   const [tableMessage, setTableMessage] = useState(
     "Preparing your first hand…",
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [betDraft, setBetDraft] = useState("");
+  const [betDraftError, setBetDraftError] = useState<string | null>(null);
   const [showDebug, setShowDebug] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextHandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -160,13 +196,32 @@ export function PocketPrototype() {
     setSuggestion(null);
   }, []);
 
+  const clearRecommendationReceipt = useCallback(() => {
+    sessionStorage.removeItem(RECOMMENDATION_RECEIPT_STORAGE_KEY);
+    setRecommendationReceipt(null);
+  }, []);
+
+  const acceptRecommendationReceipt = useCallback(
+    (receipt: RecommendationReceipt | null) => {
+      if (!receipt) return;
+      sessionStorage.setItem(
+        RECOMMENDATION_RECEIPT_STORAGE_KEY,
+        serializeRecommendationReceipt(receipt),
+      );
+      setRecommendationReceipt(receipt);
+    },
+    [],
+  );
+
   const handleSuggestion = useCallback(
     (next: AgentSuggestion) => {
       if (!situation) return;
       if (!isSuggestionCurrent(situation, next)) return;
+      clearRecommendationReceipt();
       setSuggestion(next);
+      setSuggestionPresentationRevision((current) => current + 1);
     },
-    [situation],
+    [clearRecommendationReceipt, situation],
   );
 
   const { supportState, registrationError } = usePokerTools({
@@ -176,11 +231,16 @@ export function PocketPrototype() {
   });
 
   const loadEngineSituation = useCallback(async () => {
+    await ensureSupabaseBrowserIdentity();
     const next = await requestSituation("/api/games/demo/state");
     setSituation(next);
     setMode("engine");
     setTableMessage(
-      next.isYourTurn ? "The bots posted and acted. Your turn." : resultMessage(next),
+      next.gameResult
+        ? resultMessage(next)
+        : next.isYourTurn
+          ? "The bots posted and acted. Your turn."
+          : resultMessage(next),
     );
     return next;
   }, []);
@@ -238,6 +298,24 @@ export function PocketPrototype() {
   }, [situation, suggestion]);
 
   useEffect(() => {
+    if (!situation) return;
+
+    const restored = restoreRecommendationReceipt(
+      sessionStorage.getItem(RECOMMENDATION_RECEIPT_STORAGE_KEY),
+      situation,
+    );
+    if (!restored) {
+      sessionStorage.removeItem(RECOMMENDATION_RECEIPT_STORAGE_KEY);
+    }
+
+    setRecommendationReceipt((current) =>
+      current && isRecommendationReceiptCurrent(situation, current)
+        ? current
+        : restored,
+    );
+  }, [situation?.gameId, situation?.handNumber, situation?.stateVersion]);
+
+  useEffect(() => {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
       if (nextHandTimerRef.current) clearTimeout(nextHandTimerRef.current);
@@ -251,17 +329,67 @@ export function PocketPrototype() {
       ) ?? null,
     [situation],
   );
+  const sizedAction = useMemo(
+    () =>
+      situation?.legalActions.find(
+        (action) => action.type === "bet" || action.type === "raise",
+      ) ?? null,
+    [situation],
+  );
+  const remainingPlayerCount = useMemo(
+    () => situation?.players.filter((player) => player.stack > 0).length ?? 0,
+    [situation],
+  );
+  const receiptActionSequence = useMemo(() => {
+    if (!situation || !recommendationReceipt) return null;
+
+    for (let index = situation.recentActions.length - 1; index >= 0; index -= 1) {
+      const event = situation.recentActions[index];
+      if (
+        event.playerId !== situation.yourPlayerId ||
+        event.action !== recommendationReceipt.humanChoice.action
+      ) {
+        continue;
+      }
+
+      if (
+        (event.action === "bet" || event.action === "raise") &&
+        event.amount !== recommendationReceipt.humanChoice.amount
+      ) {
+        continue;
+      }
+
+      return event.sequence;
+    }
+
+    return null;
+  }, [recommendationReceipt, situation]);
+
+  useEffect(() => {
+    setBetDraft(
+      typeof sizedAction?.min === "number" ? String(sizedAction.min) : "",
+    );
+    setBetDraftError(null);
+  }, [
+    situation?.gameId,
+    situation?.handNumber,
+    situation?.stateVersion,
+    sizedAction?.type,
+    sizedAction?.min,
+  ]);
 
   const commitMockAction = useCallback(
-    (action: PokerActionType, amount?: number, fromSuggestion = false) => {
+    (
+      action: PokerActionType,
+      amount: number | undefined,
+      receipt: RecommendationReceipt | null,
+    ) => {
       if (!situation?.isYourTurn) return;
 
       if (timerRef.current) clearTimeout(timerRef.current);
-      const actionDescription = describeAction(action, amount);
       clearSuggestion();
-      setTableMessage(
-        `${fromSuggestion ? "You followed your copilot: " : "You chose "}${actionDescription}. Alex is responding…`,
-      );
+      acceptRecommendationReceipt(receipt);
+      setTableMessage(actionPendingMessage(action, amount, receipt));
 
       setSituation((current) =>
         current
@@ -319,21 +447,24 @@ export function PocketPrototype() {
         setTableMessage(
           action === "fold"
             ? "This practice hand ends here."
-            : "Alex responded. The table changed, so any old recommendation expired.",
+            : receipt
+              ? "Alex responded. Your copilot decision remains recorded for this hand."
+              : "Alex responded. The table changed, so any old recommendation expired.",
         );
       }, 900);
     },
-    [clearSuggestion, situation],
+    [acceptRecommendationReceipt, clearSuggestion, situation],
   );
 
   const commitEngineAction = useCallback(
-    async (action: PokerActionType, amount?: number, fromSuggestion = false) => {
+    async (
+      action: PokerActionType,
+      amount: number | undefined,
+      receipt: RecommendationReceipt | null,
+    ) => {
       if (!situation?.isYourTurn || isSubmitting) return;
       setIsSubmitting(true);
-      clearSuggestion();
-      setTableMessage(
-        `${fromSuggestion ? "You followed your copilot: " : "You chose "}${describeAction(action, amount)}. The bots are responding…`,
-      );
+      setTableMessage(actionPendingMessage(action, amount, receipt));
 
       try {
         const next = await requestSituation("/api/games/demo/action", {
@@ -344,9 +475,11 @@ export function PocketPrototype() {
             expectedStateVersion: situation.stateVersion,
           }),
         });
+        clearSuggestion();
+        acceptRecommendationReceipt(receipt);
         setSituation(next);
         setTableMessage(
-          next.handResult && next.yourStack > 0
+          next.handResult && !next.gameResult
             ? `${resultMessage(next)} The next hand starts shortly.`
             : resultMessage(next),
         );
@@ -363,21 +496,66 @@ export function PocketPrototype() {
         setIsSubmitting(false);
       }
     },
-    [clearSuggestion, isSubmitting, loadEngineSituation, situation],
+    [
+      acceptRecommendationReceipt,
+      clearSuggestion,
+      isSubmitting,
+      loadEngineSituation,
+      situation,
+    ],
   );
 
   const commitHumanAction = useCallback(
-    (action: PokerActionType, amount?: number, fromSuggestion = false) => {
+    (action: PokerActionType, amount?: number) => {
+      if (!situation) return;
+
+      const currentSuggestion =
+        suggestion && isSuggestionCurrent(situation, suggestion)
+          ? suggestion
+          : null;
+      const receipt = currentSuggestion
+        ? createRecommendationReceipt(situation, currentSuggestion, {
+            action,
+            amount,
+          })
+        : null;
+
       if (mode === "mock") {
-        commitMockAction(action, amount, fromSuggestion);
+        commitMockAction(action, amount, receipt);
         return;
       }
       if (mode === "engine") {
-        void commitEngineAction(action, amount, fromSuggestion);
+        void commitEngineAction(action, amount, receipt);
       }
     },
-    [commitEngineAction, commitMockAction, mode],
+    [commitEngineAction, commitMockAction, mode, situation, suggestion],
   );
+
+  function submitSizedAction() {
+    if (!sizedAction) return;
+
+    if (!/^\d+$/.test(betDraft)) {
+      setBetDraftError("Enter a whole-chip amount.");
+      return;
+    }
+
+    const amount = Number(betDraft);
+    if (!Number.isSafeInteger(amount)) {
+      setBetDraftError("Enter a whole-chip amount.");
+      return;
+    }
+    if (typeof sizedAction.min === "number" && amount < sizedAction.min) {
+      setBetDraftError(`Minimum is ${sizedAction.min} chips.`);
+      return;
+    }
+    if (typeof sizedAction.max === "number" && amount > sizedAction.max) {
+      setBetDraftError(`Maximum is ${sizedAction.max} chips.`);
+      return;
+    }
+
+    setBetDraftError(null);
+    commitHumanAction(sizedAction.type, amount);
+  }
 
   const startNextEngineHand = useCallback(async () => {
     if (!situation || mode !== "engine" || isSubmitting) return;
@@ -410,7 +588,7 @@ export function PocketPrototype() {
     if (
       mode !== "engine" ||
       !situation?.handResult ||
-      situation.yourStack <= 0 ||
+      Boolean(situation.gameResult) ||
       isSubmitting ||
       autoNextHandVersionRef.current === situation.stateVersion
     ) {
@@ -427,27 +605,64 @@ export function PocketPrototype() {
     };
   }, [isSubmitting, mode, situation, startNextEngineHand]);
 
+  const restartEngineGame = useCallback(async () => {
+    if (!situation?.gameResult || mode !== "engine" || isSubmitting) return;
+    if (nextHandTimerRef.current) clearTimeout(nextHandTimerRef.current);
+    clearSuggestion();
+    setIsSubmitting(true);
+    setTableMessage("Resetting the table…");
+
+    try {
+      const next = await requestSituation("/api/games/demo/restart", {
+        method: "POST",
+        body: JSON.stringify({ expectedStateVersion: situation.stateVersion }),
+      });
+      autoNextHandVersionRef.current = null;
+      clearRecommendationReceipt();
+      setSituation(next);
+      setTableMessage("A new tournament is live. Four players, 40 chips each.");
+    } catch (error) {
+      setTableMessage(
+        error instanceof Error ? error.message : "The table could not restart.",
+      );
+      try {
+        await loadEngineSituation();
+      } catch {
+        // Keep the last known safe state visible if a refresh also fails.
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [
+    clearRecommendationReceipt,
+    clearSuggestion,
+    isSubmitting,
+    loadEngineSituation,
+    mode,
+    situation,
+  ]);
+
   function useSuggestion(next: AgentSuggestion) {
     if (!situation || !isSuggestionCurrent(situation, next)) {
       clearSuggestion();
       setTableMessage("Suggestion expired — the table changed.");
       return;
     }
-    commitHumanAction(next.action, next.amount, true);
+    commitHumanAction(next.action, next.amount);
   }
 
-  async function resetDemo() {
+  async function resetMockDemo() {
     if (timerRef.current) clearTimeout(timerRef.current);
     if (nextHandTimerRef.current) clearTimeout(nextHandTimerRef.current);
     clearSuggestion();
 
     if (mode === "mock") {
+      clearRecommendationReceipt();
       setSituation(INITIAL_SITUATION);
       setTableMessage("Alex raised to 44. Your turn.");
       return;
     }
 
-    await startNextEngineHand();
   }
 
   if (!situation) {
@@ -483,9 +698,18 @@ export function PocketPrototype() {
     suggestion && isSuggestionCurrent(situation, suggestion)
       ? suggestion
       : null;
+  const visibleReceipt =
+    recommendationReceipt &&
+    isRecommendationReceiptCurrent(situation, recommendationReceipt)
+      ? recommendationReceipt
+      : null;
   const turnTitle = isSubmitting
     ? "Playing your action"
-    : situation.handResult
+    : situation.gameResult?.outcome === "won"
+      ? "You won the table"
+      : situation.gameResult?.outcome === "lost"
+        ? "You’re out"
+        : situation.handResult
       ? situation.yourStack > 0
         ? "Hand complete"
         : "Session complete"
@@ -494,13 +718,15 @@ export function PocketPrototype() {
         : currentPlayer
           ? `${currentPlayer.displayName} is acting`
           : "Table paused";
-  const decisionContext = situation.isYourTurn
-    ? situation.toCall > 0
-      ? `${situation.toCall} to call`
-      : "Check available"
-    : situation.handResult
-      ? "Settled"
-      : "Waiting";
+  const decisionContext = situation.gameResult
+    ? `${remainingPlayerCount} player${remainingPlayerCount === 1 ? "" : "s"} remaining`
+    : situation.isYourTurn
+      ? situation.toCall > 0
+        ? `${situation.toCall} to call`
+        : "Check available"
+      : situation.handResult
+        ? "Settled"
+        : "Waiting";
 
   return (
     <div className="prototype">
@@ -513,6 +739,10 @@ export function PocketPrototype() {
               <span>Hand {situation.handNumber}</span>
               <span aria-hidden="true">·</span>
               <span>{titleCase(situation.street)}</span>
+              <span aria-hidden="true">·</span>
+              <span>Blinds {situation.smallBlind}/{situation.bigBlind}</span>
+              <span aria-hidden="true">·</span>
+              <span>{remainingPlayerCount} remaining</span>
             </div>
             <span
               className={`turn-status ${situation.isYourTurn && !isSubmitting ? "is-active" : ""}`}
@@ -572,32 +802,117 @@ export function PocketPrototype() {
               <span className="decision-context">{decisionContext}</span>
             </div>
             <div className="action-buttons">
-              {situation.legalActions.map((action) => (
+              {situation.legalActions
+                .filter(
+                  (action) => action.type !== "bet" && action.type !== "raise",
+                )
+                .map((action) => (
                 <button
                   key={action.type}
                   className={`action-button action-${action.type}`}
                   disabled={!situation.isYourTurn || isSubmitting}
-                  onClick={() =>
-                    commitHumanAction(action.type, amountForLegalAction(action))
-                  }
+                  onClick={() => commitHumanAction(action.type, action.amount)}
                 >
                   {actionLabel(action)}
                 </button>
-              ))}
-              {situation.legalActions.length === 0 ? (
+                ))}
+              {sizedAction ? (
+                <form
+                  className="sized-action"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    submitSizedAction();
+                  }}
+                >
+                  <label htmlFor="bet-amount">
+                    {titleCase(sizedAction.type)} amount
+                    <span>
+                      Min {sizedAction.min} · Max {sizedAction.max}
+                    </span>
+                  </label>
+                  <div className="sized-action-entry">
+                    <input
+                      id="bet-amount"
+                      name="betAmount"
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      autoComplete="off"
+                      value={betDraft}
+                      disabled={!situation.isYourTurn || isSubmitting}
+                      aria-invalid={Boolean(betDraftError)}
+                      aria-describedby={
+                        betDraftError ? "bet-amount-error" : "bet-amount-range"
+                      }
+                      onChange={(event) => {
+                        setBetDraft(event.target.value);
+                        setBetDraftError(null);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="secondary-button max-button"
+                      disabled={
+                        !situation.isYourTurn ||
+                        isSubmitting ||
+                        typeof sizedAction.max !== "number"
+                      }
+                      onClick={() => {
+                        if (typeof sizedAction.max === "number") {
+                          setBetDraft(String(sizedAction.max));
+                          setBetDraftError(null);
+                        }
+                      }}
+                    >
+                      Max
+                    </button>
+                    <button
+                      type="submit"
+                      className={`action-button action-${sizedAction.type}`}
+                      disabled={!situation.isYourTurn || isSubmitting}
+                    >
+                      {titleCase(sizedAction.type)}
+                    </button>
+                  </div>
+                  <span id="bet-amount-range" className="sr-only">
+                    Legal range {sizedAction.min} to {sizedAction.max} chips.
+                  </span>
+                  {betDraftError ? (
+                    <span
+                      id="bet-amount-error"
+                      className="field-error"
+                      role="alert"
+                    >
+                      {betDraftError}
+                    </span>
+                  ) : null}
+                </form>
+              ) : null}
+              {situation.gameResult ? (
+                <button
+                  className="action-button action-restart"
+                  disabled={isSubmitting}
+                  onClick={() => {
+                    if (mode === "mock") {
+                      void resetMockDemo();
+                    } else {
+                      void restartEngineGame();
+                    }
+                  }}
+                >
+                  Play again
+                </button>
+              ) : situation.legalActions.length === 0 ? (
                 <button
                   className="action-button action-next"
-                  disabled={
-                    isSubmitting ||
-                    (mode === "engine" && situation.yourStack <= 0)
+                  disabled={isSubmitting}
+                  onClick={() =>
+                    mode === "mock"
+                      ? void resetMockDemo()
+                      : void startNextEngineHand()
                   }
-                  onClick={() => void resetDemo()}
                 >
-                  {mode === "engine"
-                    ? situation.yourStack > 0
-                      ? "Next hand"
-                      : "Session complete"
-                    : "Reset hand"}
+                  {mode === "engine" ? "Next hand" : "Reset hand"}
                 </button>
               ) : null}
             </div>
@@ -606,14 +921,21 @@ export function PocketPrototype() {
           <AgentSuggestionPanel
             key={
               visibleSuggestion
-                ? `${visibleSuggestion.handNumber}-${visibleSuggestion.stateVersion}-${visibleSuggestion.action}`
-                : `empty-${supportState}`
+                ? `suggestion-${suggestionPresentationRevision}`
+                : visibleReceipt
+                  ? `receipt-${visibleReceipt.handNumber}-${visibleReceipt.sourceStateVersion}-${visibleReceipt.outcome}`
+                  : `empty-${supportState}`
             }
             suggestion={visibleSuggestion}
+            receipt={visibleReceipt}
             situation={situation}
             supportState={supportState}
+            isSubmitting={isSubmitting}
             onUse={useSuggestion}
-            onIgnore={clearSuggestion}
+            onDismiss={() => {
+              clearSuggestion();
+              setTableMessage("Suggestion dismissed. Choose any legal action.");
+            }}
           />
         </div>
       </section>
@@ -630,8 +952,21 @@ export function PocketPrototype() {
             {situation.recentActions.slice(-6).map((event) => (
               <li className="history-item" key={event.sequence}>
                 <span className="history-street">{event.street}</span>
-                <strong>{event.playerName}</strong>
-                <span>{describeAction(event.action, event.amount)}</span>
+                <strong>
+                  {event.playerId === situation.yourPlayerId
+                    ? "You"
+                    : event.playerName}
+                </strong>
+                <span className="history-action">
+                  <span>{describeAction(event.action, event.amount)}</span>
+                  {event.sequence === receiptActionSequence && visibleReceipt ? (
+                    <span
+                      className={`history-recommendation history-recommendation-${visibleReceipt.outcome}`}
+                    >
+                      {visibleReceipt.outcome}
+                    </span>
+                  ) : null}
+                </span>
               </li>
             ))}
           </ol>

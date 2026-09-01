@@ -14,7 +14,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "npm run typecheck && npm run test"
+    "test:e2e": "playwright test",
+    "verify:local-supabase": "vitest run --config vitest.local.config.ts",
+    "check": "npm run typecheck && npm run test",
+    "release:candidate": "npm run check && npm run build && npm run test:e2e"
   },
   "dependencies": {
     "@hivetech/poker-engine": "1.0.1",
@@ -26,6 +29,7 @@
     "zod": "latest"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",

@@ -193,13 +193,13 @@ describe("Gate 2 durable demo boundary", () => {
   it("conserves chips through repeated persistence and settlement", async () => {
     const repository = new MemoryDemoGameRepository();
     const initial = createDemoGame({ deterministicSeed: 85, repository });
-    expect(await initial.getChipTotal()).toBe(800);
+    expect(await initial.getChipTotal()).toBe(160);
 
     const settled = await settlePersistedHand(repository, 85);
     const recreated = createDemoGame({ deterministicSeed: 85, repository });
 
     expect(settled.handResult).not.toBeNull();
-    expect(await recreated.getChipTotal()).toBe(800);
+    expect(await recreated.getChipTotal()).toBe(160);
     expect(await recreated.getSituation(DEMO_HERO_ID)).toEqual(settled);
   });
 

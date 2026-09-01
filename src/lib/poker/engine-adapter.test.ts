@@ -114,6 +114,9 @@ describe("HiveTech authoritative adapter", () => {
     ]);
     expect(hero.pot).toBe(3);
     expect(hero.currentBet).toBe(2);
+    expect(hero.smallBlind).toBe(1);
+    expect(hero.bigBlind).toBe(2);
+    expect(hero.gameResult).toBeNull();
     expect(hero.dealerSeat).toBe(0);
     expect(decision.actorId).toBe("bot-west");
     expect(decision.legalActions).toEqual([
@@ -142,6 +145,17 @@ describe("HiveTech authoritative adapter", () => {
     expect(situation.handResult?.winners.length).toBeGreaterThan(0);
     expect(situation.board).toHaveLength(5);
     expect(situation.legalActions).toEqual([]);
+    expect(
+      situation.players
+        .every((player) => player.revealedCards?.length === 2),
+    ).toBe(true);
+    expect(
+      isSerializedPokerSituationPrivate(
+        JSON.stringify(situation),
+        settled,
+        "hero",
+      ),
+    ).toBe(true);
   });
 
   it("rejects out-of-turn and illegal actions without mutating state", () => {
@@ -220,7 +234,9 @@ describe("HiveTech authoritative adapter", () => {
   it("starts a replayable next hand with a rotated button and one new version", () => {
     const settled = playPassively(createGame(314));
     const previous = projectAuthoritativeGame(settled, "hero");
-    const next = startNextAuthoritativeHand(settled, 315);
+    const next = startNextAuthoritativeHand(settled, {
+      deterministicSeed: 315,
+    });
     const situation: PokerSituation = projectAuthoritativeGame(next, "hero");
 
     expect(situation.handNumber).toBe(previous.handNumber + 1);
@@ -228,5 +244,36 @@ describe("HiveTech authoritative adapter", () => {
     expect(situation.dealerSeat).toBe(1);
     expect(situation.yourCards).toHaveLength(2);
     expect(situation.handResult).toBeNull();
+  });
+
+  it("applies forced-bet changes and start-hand as one Pocket version", () => {
+    const settled = playPassively(createGame(410));
+    const previousVersion = getAuthoritativeVersion(settled);
+    const next = startNextAuthoritativeHand(settled, {
+      deterministicSeed: 411,
+      smallBlind: 2,
+      bigBlind: 4,
+    });
+    const restored = restoreAuthoritativeGame(serializeAuthoritativeGame(next));
+    const situation = projectAuthoritativeGame(restored, "hero");
+
+    expect(situation.smallBlind).toBe(2);
+    expect(situation.bigBlind).toBe(4);
+    expect(situation.stateVersion).toBe(previousVersion + 1);
+    expect(situation.handNumber).toBe(2);
+  });
+
+  it("never reveals a folded opponent's hidden cards", () => {
+    let state = createGame(700);
+    state = applyAuthoritativeAction(state, "bot-west", { action: "fold" });
+    state = playPassively(state);
+    const situation = projectAuthoritativeGame(state, "hero");
+    const folded = situation.players.find((player) => player.id === "bot-west");
+
+    expect(folded?.status).toBe("folded");
+    expect(folded?.revealedCards).toBeUndefined();
+    expect(isSerializedPokerSituationPrivate(JSON.stringify(situation), state, "hero")).toBe(
+      true,
+    );
   });
 });

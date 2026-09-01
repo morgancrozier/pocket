@@ -1,0 +1,468 @@
+import { createClient } from "@supabase/supabase-js";
+import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import type { PlayingRoomSnapshot, RoomSnapshot } from "../../src/types/poker";
+
+async function installWebMCPStub(context: BrowserContext) {
+  await context.addInitScript(() => {
+    const tools = new Map<
+      string,
+      { name: string; execute: (input: object) => unknown }
+    >();
+    Object.defineProperty(document, "modelContext", {
+      configurable: true,
+      value: {
+        async registerTool(
+          tool: { name: string; execute: (input: object) => unknown },
+          options?: { signal?: AbortSignal },
+        ) {
+          tools.set(tool.name, tool);
+          options?.signal?.addEventListener(
+            "abort",
+            () => {
+              if (tools.get(tool.name) === tool) tools.delete(tool.name);
+            },
+            { once: true },
+          );
+        },
+        async getTools() {
+          return [...tools.values()];
+        },
+        async executeTool(tool: { name: string }, input: object) {
+          const registered = tools.get(tool.name);
+          if (!registered) throw new Error(`Tool ${tool.name} is unavailable.`);
+          return registered.execute(input);
+        },
+      },
+    });
+  });
+}
+
+async function getRoom(page: Page, roomCode: string): Promise<RoomSnapshot> {
+  return page.evaluate(async (code) => {
+    const response = await fetch(`/api/rooms/${code}/state`, {
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error(`State failed with ${response.status}.`);
+    return response.json();
+  }, roomCode);
+}
+
+async function mutate(
+  page: Page,
+  roomCode: string,
+  operation: "action" | "advance",
+  body: Record<string, unknown>,
+) {
+  return page.evaluate(
+    async ({ code, operationName, requestBody }) => {
+      const response = await fetch(`/api/rooms/${code}/${operationName}`, {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+      return {
+        status: response.status,
+        payload: await response.json(),
+      };
+    },
+    { code: roomCode, operationName: operation, requestBody: body },
+  );
+}
+
+async function toolNames(page: Page): Promise<string[]> {
+  return page.evaluate(async () =>
+    (await document.modelContext.getTools()).map((tool) => tool.name).sort(),
+  );
+}
+
+async function executeTool(
+  page: Page,
+  name: string,
+  input: Record<string, unknown> = {},
+) {
+  return page.evaluate(
+    async ({ toolName, toolInput }) => {
+      const tools = await document.modelContext.getTools();
+      const tool = tools.find((candidate) => candidate.name === toolName);
+      if (!tool) throw new Error(`Tool ${toolName} is unavailable.`);
+      return JSON.parse(
+        await document.modelContext.executeTool(tool, toolInput),
+      ) as unknown;
+    },
+    { toolName: name, toolInput: input },
+  );
+}
+
+function playing(room: RoomSnapshot): PlayingRoomSnapshot {
+  if (room.phase === "waiting") throw new Error("Expected a playing room.");
+  return room;
+}
+
+function safePayload(value: unknown) {
+  const serialized = JSON.stringify(value);
+  expect(serialized).not.toMatch(
+    /"(?:engine_state|engineState|deck|burn|burnCards|burn_cards)"\s*:/,
+  );
+  expect(serialized).not.toMatch(/"(?:rank|suit)"\s*:/);
+}
+
+async function waitForRevision(page: Page, roomCode: string, minimum: number) {
+  await expect
+    .poll(async () => (await getRoom(page, roomCode)).revision, {
+      timeout: 15_000,
+    })
+    .toBeGreaterThanOrEqual(minimum);
+}
+
+test("real two-browser room remains seat-safe through spectating and restart", async ({
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const secretKey = process.env.SUPABASE_SECRET_KEY;
+  const allowManaged = process.env.POCKET_ALLOW_MANAGED_E2E === "1";
+  const isLocal =
+    Boolean(supabaseUrl) &&
+    ["127.0.0.1", "localhost"].includes(new URL(supabaseUrl!).hostname);
+  if (!supabaseUrl || !secretKey || (!isLocal && !allowManaged)) {
+    throw new Error(
+      "The multiplayer browser suite requires isolated local Supabase unless POCKET_ALLOW_MANAGED_E2E=1 is set explicitly.",
+    );
+  }
+  const admin = createClient(supabaseUrl, secretKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const contextA = await browser.newContext();
+  const contextB = await browser.newContext();
+  await Promise.all([installWebMCPStub(contextA), installWebMCPStub(contextB)]);
+  let pageA = await contextA.newPage();
+  let pageB = await contextB.newPage();
+  const observedPayloads: unknown[] = [];
+  let roomCode: string | null = null;
+  let gameId: string | null = null;
+
+  for (const page of [pageA, pageB]) {
+    page.on("response", async (response) => {
+      if (!response.url().includes("/api/rooms/")) return;
+      if (!response.headers()["content-type"]?.includes("application/json")) return;
+      try {
+        observedPayloads.push(await response.json());
+      } catch {
+        // A navigation may dispose a response body after the safety assertion path.
+      }
+    });
+  }
+
+  try {
+    await pageA.goto("/");
+    await pageA.getByLabel("Your table name").fill("Morgan");
+    await pageA.getByRole("button", { name: "Create multiplayer table" }).click();
+    await expect(pageA).toHaveURL(/\/table\/[A-Z0-9]{8}$/);
+    roomCode = new URL(pageA.url()).pathname.split("/").at(-1)!;
+    await expect(pageA.getByText("Waiting room")).toBeVisible();
+    const ownerWaiting = await getRoom(pageA, roomCode);
+    gameId = ownerWaiting.gameId;
+    expect(ownerWaiting.viewer).toMatchObject({ seat: 0, isOwner: true });
+
+    const secondOwnerTab = await contextA.newPage();
+    await secondOwnerTab.goto(`/table/${roomCode}`);
+    await expect(secondOwnerTab.getByText("Waiting room")).toBeVisible();
+    const ownerResumed = await getRoom(secondOwnerTab, roomCode);
+    expect(ownerResumed.viewer.playerId).toBe(ownerWaiting.viewer.playerId);
+    expect(ownerResumed.viewer.seat).toBe(0);
+    expect(await toolNames(pageA)).toEqual([]);
+    expect(await toolNames(secondOwnerTab)).toEqual([]);
+
+    await pageB.goto(`/table/${roomCode}`);
+    await expect(pageB.getByText("Take the second seat")).toBeVisible();
+    await pageB.getByLabel("Your table name").fill("Morgan");
+    await pageB.getByRole("button", { name: "Sit down" }).click();
+    await expect(pageB.getByText("You have the second seat")).toBeVisible();
+    const guestWaiting = await getRoom(pageB, roomCode);
+    expect(guestWaiting.viewer).toMatchObject({
+      seat: 2,
+      displayName: "Morgan",
+      isOwner: false,
+    });
+    expect(guestWaiting.viewer.playerId).not.toBe(ownerWaiting.viewer.playerId);
+    expect(await toolNames(pageB)).toEqual([]);
+    await expect
+      .poll(async () => (await getRoom(pageA, roomCode!)).revision)
+      .toBe(guestWaiting.revision);
+    await expect(
+      pageA.locator('.waiting-seat[data-human="true"]'),
+    ).toHaveCount(2, { timeout: 15_000 });
+
+    await pageA.getByRole("button", { name: "Start table" }).click();
+    await expect(pageA.getByText(/Revision \d+/)).toBeVisible();
+    const owner = playing(await getRoom(pageA, roomCode));
+    await waitForRevision(pageB, roomCode, owner.revision);
+    const guest = playing(await getRoom(pageB, roomCode));
+    expect(owner.revision).toBe(guest.revision);
+    expect(owner.situation.board).toEqual(guest.situation.board);
+    expect(owner.situation.pot).toBe(guest.situation.pot);
+    expect(owner.situation.currentActorId).toBe(guest.situation.currentActorId);
+    expect(owner.situation.recentActions).toEqual(guest.situation.recentActions);
+    expect(owner.situation.yourPlayerId).not.toBe(guest.situation.yourPlayerId);
+    expect(owner.situation.yourCards).toHaveLength(2);
+    expect(guest.situation.yourCards).toHaveLength(2);
+    expect(owner.situation.yourCards).not.toEqual(guest.situation.yourCards);
+    safePayload(owner);
+    safePayload(guest);
+
+    await expect
+      .poll(() => toolNames(pageA))
+      .toContain("get_current_situation");
+    await expect
+      .poll(() => toolNames(pageB))
+      .toContain("get_current_situation");
+    const ownerToolView = (await executeTool(
+      pageA,
+      "get_current_situation",
+    )) as PlayingRoomSnapshot["situation"] & {
+      roomPhase: string;
+      viewerStatus: string;
+    };
+    const guestToolView = (await executeTool(
+      pageB,
+      "get_current_situation",
+    )) as PlayingRoomSnapshot["situation"] & {
+      roomPhase: string;
+      viewerStatus: string;
+    };
+    expect(ownerToolView.yourPlayerId).toBe(owner.viewer.playerId);
+    expect(ownerToolView.yourCards).toEqual(owner.situation.yourCards);
+    expect(guestToolView.yourPlayerId).toBe(guest.viewer.playerId);
+    expect(guestToolView.yourCards).toEqual(guest.situation.yourCards);
+    expect(ownerToolView.roomPhase).toBe("active");
+    expect(guestToolView.viewerStatus).toBe("seated");
+
+    const actingPage =
+      owner.situation.currentActorId === owner.viewer.playerId ? pageA : pageB;
+    const observingPage = actingPage === pageA ? pageB : pageA;
+    const actingRoom = actingPage === pageA ? owner : guest;
+    const maximum = actingRoom.situation.legalActions.find(
+      (action) => action.type === "bet" || action.type === "raise",
+    );
+    if (maximum) {
+      await actingPage.getByRole("button", { name: "Max" }).click();
+      await actingPage
+        .getByRole("button", { name: new RegExp(`^${maximum.type}$`, "i") })
+        .click();
+    } else {
+      const passive =
+        actingRoom.situation.legalActions.find((action) => action.type === "check") ??
+        actingRoom.situation.legalActions.find((action) => action.type === "call") ??
+        actingRoom.situation.legalActions.find((action) => action.type === "fold");
+      if (!passive) throw new Error("The current human has no legal UI action.");
+      const buttonName =
+        passive.type === "call"
+          ? new RegExp(`^Call ${passive.amount}$`)
+          : new RegExp(`^${passive.type}$`, "i");
+      await actingPage.getByRole("button", { name: buttonName }).click();
+    }
+    await expect
+      .poll(async () => (await getRoom(actingPage, roomCode!)).revision)
+      .toBeGreaterThan(owner.revision);
+    const afterClickedAction = playing(await getRoom(actingPage, roomCode));
+    await waitForRevision(observingPage, roomCode, afterClickedAction.revision);
+    await expect(
+      observingPage.getByText(`Revision ${afterClickedAction.revision}`),
+    ).toBeVisible();
+    expect(
+      afterClickedAction.situation.currentActorId === null ||
+        [owner.viewer.playerId, guest.viewer.playerId].includes(
+          afterClickedAction.situation.currentActorId,
+        ),
+    ).toBe(true);
+
+    let adviceOwner = playing(await getRoom(pageA, roomCode));
+    let adviceGuest = playing(await getRoom(pageB, roomCode));
+    if (adviceOwner.situation.handResult) {
+      const advanced = await mutate(pageA, roomCode, "advance", {
+        expectedRevision: adviceOwner.revision,
+      });
+      expect([200, 409]).toContain(advanced.status);
+      adviceOwner = playing(await getRoom(pageA, roomCode));
+      adviceGuest = playing(await getRoom(pageB, roomCode));
+    }
+    const advicePage =
+      adviceOwner.situation.currentActorId === adviceOwner.viewer.playerId
+        ? pageA
+        : pageB;
+    const otherAdvicePage = advicePage === pageA ? pageB : pageA;
+    const adviceRoom = advicePage === pageA ? adviceOwner : adviceGuest;
+    const advice =
+      adviceRoom.situation.legalActions.find((action) => action.type === "check") ??
+      adviceRoom.situation.legalActions.find((action) => action.type === "call") ??
+      adviceRoom.situation.legalActions.find((action) => action.type === "fold");
+    if (!advice) throw new Error("The current human has no legal advice target.");
+    await expect.poll(() => toolNames(advicePage)).toContain("suggest_action");
+    const adviceRevision = adviceRoom.revision;
+    await executeTool(advicePage, "suggest_action", {
+      action: advice.type,
+      confidence: 0.72,
+    });
+    await expect(advicePage.getByText("Your copilot suggests")).toBeVisible();
+    await expect(otherAdvicePage.getByText("Your copilot suggests")).toHaveCount(0);
+    expect((await getRoom(pageA, roomCode)).revision).toBe(adviceRevision);
+    expect((await getRoom(pageB, roomCode)).revision).toBe(adviceRevision);
+
+    const stableOwnerId = (await getRoom(pageA, roomCode)).viewer.playerId;
+    const stableGuestId = (await getRoom(pageB, roomCode)).viewer.playerId;
+    await pageA.close();
+    await pageB.close();
+    pageA = await contextA.newPage();
+    pageB = await contextB.newPage();
+    await Promise.all([
+      pageA.goto(`/table/${roomCode}`),
+      pageB.goto(`/table/${roomCode}`),
+    ]);
+    await expect(pageA.getByText(/Revision \d+/)).toBeVisible();
+    await expect(pageB.getByText(/Revision \d+/)).toBeVisible();
+    expect((await getRoom(pageA, roomCode)).viewer.playerId).toBe(stableOwnerId);
+    expect((await getRoom(pageB, roomCode)).viewer.playerId).toBe(stableGuestId);
+
+    let spectatorChecked = false;
+    let complete: PlayingRoomSnapshot | null = null;
+    for (let guard = 0; guard < 300; guard += 1) {
+      const currentOwner = playing(await getRoom(pageA, roomCode));
+      const currentGuest = playing(await getRoom(pageB, roomCode));
+      const spectator =
+        currentOwner.viewer.status === "eliminated"
+          ? { page: pageA, room: currentOwner }
+          : currentGuest.viewer.status === "eliminated"
+            ? { page: pageB, room: currentGuest }
+            : null;
+      if (spectator && !spectatorChecked) {
+        await waitForRevision(spectator.page, roomCode, spectator.room.revision);
+        await expect
+          .poll(() => toolNames(spectator.page))
+          .toEqual(["get_current_situation", "get_hand_history"]);
+        await expect(
+          spectator.page.getByRole("heading", { name: "Spectator tools ready" }),
+        ).toBeVisible({ timeout: 15_000 });
+        await expect
+          .poll(async () => {
+            const current = (await executeTool(
+              spectator.page,
+              "get_current_situation",
+            )) as Record<string, unknown>;
+            return current.viewerStatus;
+          })
+          .toBe("eliminated");
+        const view = (await executeTool(
+          spectator.page,
+          "get_current_situation",
+        )) as Record<string, unknown>;
+        expect(view).toMatchObject({
+          viewerStatus: "eliminated",
+          yourCards: [],
+          legalActions: [],
+          isYourTurn: false,
+        });
+        safePayload(view);
+        spectatorChecked = true;
+      }
+
+      if (currentOwner.phase === "complete") {
+        complete = currentOwner;
+        break;
+      }
+
+      if (currentOwner.situation.handResult) {
+        const advanced = await mutate(pageA, roomCode, "advance", {
+          expectedRevision: currentOwner.revision,
+        });
+        expect([200, 409]).toContain(advanced.status);
+        continue;
+      }
+
+      const actorPage =
+        currentOwner.situation.currentActorId === currentOwner.viewer.playerId
+          ? pageA
+          : pageB;
+      const actor = actorPage === pageA ? currentOwner : currentGuest;
+      const sized = actor.situation.legalActions.find(
+        (action) => action.type === "bet" || action.type === "raise",
+      );
+      const fallback =
+        actor.situation.legalActions.find((action) => action.type === "check") ??
+        actor.situation.legalActions.find((action) => action.type === "call") ??
+        actor.situation.legalActions.find((action) => action.type === "fold");
+      const intent = sized
+        ? { action: sized.type, amount: sized.max }
+        : fallback
+          ? { action: fallback.type }
+          : null;
+      if (!intent) throw new Error("The authoritative human turn has no action.");
+      const acted = await mutate(actorPage, roomCode, "action", {
+        actionId: crypto.randomUUID(),
+        expectedRevision: actor.revision,
+        ...intent,
+      });
+      expect([200, 409]).toContain(acted.status);
+    }
+
+    expect(spectatorChecked).toBe(true);
+    expect(complete?.phase).toBe("complete");
+    expect(complete?.result?.reason).toMatch(
+      /last-player-standing|all-humans-eliminated/,
+    );
+    await waitForRevision(pageB, roomCode, complete!.revision);
+    await expect(pageA.getByRole("button", { name: "Play again" })).toBeVisible();
+    await expect(pageB.getByRole("button", { name: "Play again" })).toHaveCount(0);
+    const terminalRevision = complete!.revision;
+    await pageA.getByRole("button", { name: "Play again" }).click();
+    await expect
+      .poll(async () => (await getRoom(pageA, roomCode!)).revision)
+      .toBeGreaterThan(terminalRevision);
+    const restartedOwner = playing(await getRoom(pageA, roomCode));
+    await waitForRevision(pageB, roomCode, restartedOwner.revision);
+    const restartedGuest = playing(await getRoom(pageB, roomCode));
+    expect(restartedOwner.phase).toBe("active");
+    expect(restartedOwner.viewer.playerId).toBe(stableOwnerId);
+    expect(restartedGuest.viewer.playerId).toBe(stableGuestId);
+    expect(restartedOwner.seats.filter((seat) => !seat.isBot)).toHaveLength(2);
+
+    for (const payload of observedPayloads) safePayload(payload);
+  } finally {
+    let cleanupGameId = gameId;
+    if (!cleanupGameId && roomCode) {
+      const { data: roomRow } = await admin
+        .from("games")
+        .select("id")
+        .eq("room_code", roomCode)
+        .maybeSingle();
+      cleanupGameId = roomRow?.id ?? null;
+    }
+    if (cleanupGameId) {
+      const { data: humanRows } = await admin
+        .from("game_players")
+        .select("user_id")
+        .eq("game_id", cleanupGameId)
+        .not("user_id", "is", null);
+      const userIds = (humanRows ?? []).map((row) => row.user_id as string);
+      const { error: roomCleanupError } = await admin
+        .from("games")
+        .delete()
+        .eq("id", cleanupGameId);
+      expect(roomCleanupError).toBeNull();
+      if (userIds.length) {
+        const { error: demoCleanupError } = await admin
+          .from("games")
+          .delete()
+          .in("id", userIds);
+        expect(demoCleanupError).toBeNull();
+      }
+      const authCleanup = await Promise.all(
+        userIds.map((userId) => admin.auth.admin.deleteUser(userId)),
+      );
+      expect(authCleanup.map((result) => result.error)).toEqual(
+        userIds.map(() => null),
+      );
+    }
+    await Promise.all([contextA.close(), contextB.close()]);
+  }
+});

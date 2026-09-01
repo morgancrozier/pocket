@@ -70,9 +70,10 @@ async function serverAuthClient() {
 }
 
 /**
- * GET state is the only route allowed to create an anonymous identity. If an
- * auth cookie was supplied but cannot be validated, it is treated as expired
- * rather than silently swapping the browser into a new seat.
+ * Initial demo state, room creation, and waiting-room join may create an
+ * anonymous identity. If an auth cookie was supplied but cannot be validated,
+ * it is treated as expired rather than silently swapping the browser into a
+ * new seat.
  */
 export async function getOrCreateDemoUserId(
   request: NextRequest,

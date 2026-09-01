@@ -21,6 +21,8 @@ export const INITIAL_SITUATION: PokerSituation = {
   pot: 68,
   currentBet: 44,
   toCall: 32,
+  smallBlind: 1,
+  bigBlind: 2,
   dealerSeat: 0,
   legalActions: [
     { type: "fold" },
@@ -112,6 +114,7 @@ export const INITIAL_SITUATION: PokerSituation = {
     },
   ],
   handResult: null,
+  gameResult: null,
 };
 
 export function isMockFallbackRequested(search: string): boolean {

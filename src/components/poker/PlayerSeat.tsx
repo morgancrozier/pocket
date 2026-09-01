@@ -14,14 +14,21 @@ export function PlayerSeat({
   isDealer,
   localCards,
 }: PlayerSeatProps) {
-  const showLocalCards = Boolean(localCards?.length);
-  const showBacks = !showLocalCards && player.status !== "folded";
+  const visibleCards = localCards?.length ? localCards : player.revealedCards;
+  const showVisibleCards = Boolean(visibleCards?.length);
+  const showBacks =
+    !showVisibleCards &&
+    player.status !== "folded" &&
+    player.status !== "waiting" &&
+    player.status !== "out";
 
   return (
-    <div className={`player-seat seat-${player.seat}`}>
-      <div className="seat-cards card-row" aria-hidden={!showLocalCards}>
-        {showLocalCards ? (
-          localCards?.map((card) => <PlayingCard key={card} card={card} />)
+    <div
+      className={`player-seat seat-${player.seat} ${player.status === "out" ? "is-out" : ""}`}
+    >
+      <div className="seat-cards card-row" aria-hidden={!showVisibleCards}>
+        {showVisibleCards ? (
+          visibleCards?.map((card) => <PlayingCard key={card} card={card} />)
         ) : showBacks ? (
           <>
             <PlayingCard hidden />
