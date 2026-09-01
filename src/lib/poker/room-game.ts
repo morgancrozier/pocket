@@ -28,6 +28,7 @@ import {
   type StoredRoomPlayer,
   type StoredRoomStatus,
 } from "@/lib/poker/room-game-repository";
+import { ROOM_CODE_ALPHABET } from "@/lib/poker/room-code";
 import type {
   PokerActionIntent,
   PokerSituation,
@@ -38,7 +39,6 @@ import type {
 } from "@/types/poker";
 
 const CLAIM_LEASE_MS = 15_000;
-const ROOM_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
 const BOT_NAMES = ["Alex", "June", "Theo"] as const;
 
 export type RoomGameErrorCode =

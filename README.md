@@ -17,6 +17,9 @@ through the durable demo.
 
 ## What works now
 
+- A choice-first launcher for bot play, private hosting, or joining by code;
+  the homepage creates no session, table state, or WebMCP tools before the
+  visitor chooses a mode.
 - A four-seat, play-money table backed by a server-authoritative Hold'em engine.
 - An eight-character room link with a fixed creator seat, optional guest seat,
   same-session tab recovery, and duplicate display-name support.
@@ -68,7 +71,7 @@ through the durable demo.
 - Focused Playwright flows for responsive rendering, raw amount drafting,
   same-state advice replacement, rejected-action behavior, followed and
   overridden receipts, terminal results, and restart.
-- The original mock interaction at `?mode=mock` as an explicit fallback.
+- The original mock interaction at `/play?mode=mock` as an explicit fallback.
 - Reviewed Supabase migrations for private state and Gate 2 mutation claims.
 - Full product spec, build gates, and an initial Codex prompt.
 
@@ -123,17 +126,21 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+Open `http://localhost:3000`. The launcher offers **Play with Bots**, **Host a
+Game**, and **Join with a Code**. Bot play runs at `/play`; multiplayer waiting
+rooms and tables use `/table/[roomCode]`.
 
-The default engine path requires a Supabase project or local runtime with
-anonymous sign-ins enabled, migrations `0001` through `0003` applied, and all three Supabase
-environment values configured. The secret key is server-only and must never
-use a `NEXT_PUBLIC_` name.
+The launcher itself does not create an anonymous session or load a game. Bot
+play, hosting, and joining require a Supabase project or local runtime with
+anonymous sign-ins enabled, migrations `0001` through `0003` applied, and all
+three Supabase environment values configured. The secret key is server-only
+and must never use a `NEXT_PUBLIC_` name.
 
-Add `?mode=mock` to the URL for the preserved fallback, which requires no
-Supabase configuration. If the storage/auth path is unavailable, the page also
-falls back safely rather than exposing a server error. Use the **Development
-spike controls** under the table to inspect the registered tools or inject a
+Open `/play?mode=mock` for the preserved fallback, which requires no Supabase
+configuration. Legacy `/?mode=mock` links redirect there. If the storage/auth
+path is unavailable, the bot table also falls back safely rather than exposing
+a server error. Add `debug=1` to the play URL to use the **Development spike
+controls** under the table to inspect the registered tools or inject a
 recommendation.
 
 ### Private candidate evidence boundary

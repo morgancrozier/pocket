@@ -292,7 +292,7 @@ test("safe tournament UI replaces and follows advice through restart", async ({
   });
 
   await page.setViewportSize({ width: 960, height: 900 });
-  await page.goto("/");
+  await page.goto("/play");
   await expect(page.getByText("WebMCP ready")).toBeVisible();
   await expect(page.getByText("Blinds 2/4", { exact: false }).first()).toBeVisible();
   await expect(page.getByText("4 remaining", { exact: false })).toBeVisible();
@@ -404,7 +404,7 @@ test("rejected actions do not create receipts and accepted overrides do", async 
   });
 
   await page.setViewportSize({ width: 960, height: 900 });
-  await page.goto("/");
+  await page.goto("/play");
   await expect(page.getByText("WebMCP ready")).toBeVisible();
   await suggest(page, { action: "raise", amount: 12, confidence: 0.8 });
 

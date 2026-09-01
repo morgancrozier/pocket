@@ -156,9 +156,13 @@ test("real two-browser room remains seat-safe through spectating and restart", a
 
   try {
     await pageA.goto("/");
-    await pageA.getByLabel("Your table name").fill("Morgan");
-    await pageA.getByRole("button", { name: "Create multiplayer table" }).click();
-    await expect(pageA).toHaveURL(/\/table\/[A-Z0-9]{8}$/);
+    await pageA.getByRole("button", { name: /Host a Game/ }).click();
+    await expect(pageA.locator("#host-display-name")).toBeFocused();
+    await pageA.locator("#host-display-name").fill("Morgan");
+    await pageA.getByRole("button", { name: "Create table" }).click();
+    await expect(pageA).toHaveURL(/\/table\/[A-Z0-9]{8}$/, {
+      timeout: 15_000,
+    });
     roomCode = new URL(pageA.url()).pathname.split("/").at(-1)!;
     await expect(pageA.getByText("Waiting room")).toBeVisible();
     const ownerWaiting = await getRoom(pageA, roomCode);
@@ -176,8 +180,17 @@ test("real two-browser room remains seat-safe through spectating and restart", a
 
     await pageB.goto(`/table/${roomCode}`);
     await expect(pageB.getByText("Take the second seat")).toBeVisible();
-    await pageB.getByLabel("Your table name").fill("Morgan");
-    await pageB.getByRole("button", { name: "Sit down" }).click();
+    await pageB.goto("/");
+    await pageB.getByRole("button", { name: /Join with a Code/ }).click();
+    await expect(pageB.locator("#join-room-code")).toBeFocused();
+    await pageB.locator("#join-room-code").fill("ZZZZZZZZ");
+    await pageB.locator("#join-display-name-home").fill("Morgan");
+    await pageB.getByRole("button", { name: "Join table" }).click();
+    await expect(pageB.getByText("That Pocket room does not exist.")).toBeVisible();
+    await expect(pageB).toHaveURL(/\/$/);
+    await pageB.locator("#join-room-code").fill(roomCode);
+    await pageB.getByRole("button", { name: "Join table" }).click();
+    await expect(pageB).toHaveURL(new RegExp(`/table/${roomCode}$`));
     await expect(pageB.getByText("You have the second seat")).toBeVisible();
     const guestWaiting = await getRoom(pageB, roomCode);
     expect(guestWaiting.viewer).toMatchObject({
@@ -416,7 +429,9 @@ test("real two-browser room remains seat-safe through spectating and restart", a
     const terminalRevision = complete!.revision;
     await pageA.getByRole("button", { name: "Play again" }).click();
     await expect
-      .poll(async () => (await getRoom(pageA, roomCode!)).revision)
+      .poll(async () => (await getRoom(pageA, roomCode!)).revision, {
+        timeout: 15_000,
+      })
       .toBeGreaterThan(terminalRevision);
     const restartedOwner = playing(await getRoom(pageA, roomCode));
     await waitForRevision(pageB, roomCode, restartedOwner.revision);

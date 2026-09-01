@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentSuggestionPanel } from "@/components/poker/AgentSuggestionPanel";
 import { DebugPanel } from "@/components/poker/DebugPanel";
@@ -77,7 +78,11 @@ function PocketHeader({
   return (
     <header className="topbar">
       <div className="brand-block">
-        <h1>Pocket</h1>
+        <h1>
+          <Link className="brand-home-link" href="/" aria-label="Pocket home">
+            Pocket
+          </Link>
+        </h1>
         <p className="tagline">Every seat has two minds.</p>
       </div>
       <div className="status-stack">

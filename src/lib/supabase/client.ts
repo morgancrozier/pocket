@@ -33,9 +33,9 @@ export function hasSupabaseAuthCookie(): boolean {
 }
 
 /**
- * The homepage contains both the durable demo and room creation. They share
- * one browser-side identity initializer so React effects and a fast room click
- * cannot race to create different anonymous users and overwrite one cookie.
+ * Game entry paths share one browser-side identity initializer so repeated
+ * effects or submissions cannot race to create different anonymous users and
+ * overwrite one seat cookie.
  */
 export function ensureSupabaseBrowserIdentity(): Promise<string> {
   if (identityPromise) return identityPromise;
