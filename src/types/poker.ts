@@ -23,8 +23,10 @@ export type PokerActionType = "fold" | "check" | "call" | "bet" | "raise";
 export interface LegalAction {
   type: PokerActionType;
   amount?: number;
-  min?: number;
-  max?: number;
+  /** Final total chips committed on this street, never an increment. */
+  minTotal?: number;
+  /** Final total chips committed on this street, never an increment. */
+  maxTotal?: number;
 }
 
 export interface PublicPlayerView {
@@ -94,6 +96,7 @@ export type GameResult =
 
 export interface PokerActionIntent {
   action: PokerActionType;
+  /** For bet or raise: final total chips committed on this street. */
   amount?: number;
 }
 

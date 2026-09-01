@@ -27,7 +27,7 @@ export const INITIAL_SITUATION: PokerSituation = {
   legalActions: [
     { type: "fold" },
     { type: "call", amount: 32 },
-    { type: "raise", min: 64, max: 184 },
+    { type: "raise", minTotal: 64, maxTotal: 184 },
   ],
   players: [
     {
@@ -155,17 +155,23 @@ export function isSuggestionLegal(
       };
     }
 
-    if (typeof legal.min === "number" && suggestion.amount < legal.min) {
+    if (
+      typeof legal.minTotal === "number" &&
+      suggestion.amount < legal.minTotal
+    ) {
       return {
         ok: false,
-        reason: `Minimum ${suggestion.action} is ${legal.min}.`,
+        reason: `Minimum total for ${suggestion.action} is ${legal.minTotal}.`,
       };
     }
 
-    if (typeof legal.max === "number" && suggestion.amount > legal.max) {
+    if (
+      typeof legal.maxTotal === "number" &&
+      suggestion.amount > legal.maxTotal
+    ) {
       return {
         ok: false,
-        reason: `Maximum ${suggestion.action} is ${legal.max}.`,
+        reason: `Maximum total for ${suggestion.action} is ${legal.maxTotal}.`,
       };
     }
   }
@@ -178,8 +184,8 @@ export function amountForLegalAction(action: LegalAction): number | undefined {
     return action.amount;
   }
 
-  if (typeof action.min === "number") {
-    return action.min;
+  if (typeof action.minTotal === "number") {
+    return action.minTotal;
   }
 
   return undefined;
@@ -203,7 +209,7 @@ export function nextMockLegalActions(street: PokerStreet): LegalAction[] {
 
   return [
     { type: "check" },
-    { type: "bet", min: 8, max: 148 },
+    { type: "bet", minTotal: 8, maxTotal: 148 },
   ];
 }
 

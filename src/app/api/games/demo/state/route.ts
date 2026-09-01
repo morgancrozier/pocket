@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { demoApiErrorResponse } from "@/lib/poker/demo-api";
 import { DEMO_HERO_ID } from "@/lib/poker/demo-game";
-import { getDemoGameStore } from "@/lib/poker/demo-game-store";
+import {
+  getDemoGameStore,
+  parseDemoGameMode,
+  parseJudgeDemoRun,
+} from "@/lib/poker/demo-game-store";
 import { getOrCreateDemoUserId } from "@/lib/poker/demo-session";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +16,8 @@ export async function GET(request: NextRequest) {
     const authenticatedUserId = await getOrCreateDemoUserId(request);
     const situation = await getDemoGameStore(
       authenticatedUserId,
+      parseDemoGameMode(request.nextUrl.searchParams.get("demo")),
+      parseJudgeDemoRun(request.nextUrl.searchParams.get("run")),
     ).getSituation(DEMO_HERO_ID);
 
     return NextResponse.json(situation, {

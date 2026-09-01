@@ -122,16 +122,19 @@ export function GameLauncher() {
         <header className="launcher-brand">
           <h1>Pocket</h1>
           <p>Every seat has two minds.</p>
+          <Link className="launcher-about-link" href="/about">
+            About Pocket <span aria-hidden="true">↗</span>
+          </Link>
         </header>
 
         <div className="launcher-layout">
           <section className="launcher-intro" aria-labelledby="launcher-title">
             <span className="launcher-kicker">Play-money Texas Hold&apos;em</span>
-            <h2 id="launcher-title">Choose how you want to play.</h2>
+            <h2 id="launcher-title">Bring your own AI to the table.</h2>
             <p>
-              Bring the personal agent you already trust. It reads your safe
-              seat through WebMCP, recommends a move, and leaves every decision
-              to you.
+              Pocket uses WebMCP to let your agent understand the live game,
+              reason about your decision, and make a recommendation while you
+              stay in control.
             </p>
             <div className="launcher-table-mark" aria-hidden="true">
               <span className="launcher-seat-mark seat-mark-top" />
@@ -142,7 +145,7 @@ export function GameLauncher() {
             </div>
             <p className="launcher-trust">
               Play money <span aria-hidden="true">·</span> No account needed
-              <span aria-hidden="true">·</span> Your agent advises. You play.
+              <span aria-hidden="true">·</span> Your agent. Your decision.
             </p>
           </section>
 
@@ -150,7 +153,7 @@ export function GameLauncher() {
             <div className="launcher-choice launcher-choice-primary">
               <Link
                 className="launcher-choice-trigger"
-                href="/play"
+                href="/play?demo=judge"
                 prefetch={false}
               >
                 <span className="launcher-choice-number">01</span>

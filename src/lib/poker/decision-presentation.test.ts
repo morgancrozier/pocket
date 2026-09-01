@@ -29,7 +29,7 @@ function situation(
     legalActions: [
       { type: "fold" },
       { type: "call", amount: 4 },
-      { type: "raise", min: 6, max: 40 },
+      { type: "raise", minTotal: 6, maxTotal: 40 },
     ],
     players: [
       {
@@ -149,7 +149,7 @@ describe("decision presentation", () => {
 
   it("explains fold, call, and raise without recommending one", () => {
     expect(createDecisionPresentation(situation()).guidance).toBe(
-      "It costs 4 chips to continue. Fold, Call 4, or Raise 6–40.",
+      "It costs 4 chips to continue. Fold, Call 4, or Raise to 6–40.",
     );
   });
 
@@ -160,13 +160,13 @@ describe("decision presentation", () => {
         toCall: 0,
         legalActions: [
           { type: "check" },
-          { type: "bet", min: 2, max: 40 },
+          { type: "bet", minTotal: 2, maxTotal: 40 },
         ],
       }),
     );
 
     expect(presentation.guidance).toBe(
-      "No bet to match. Check for free or Bet 2–40.",
+      "No bet to match. Check for free or Bet total 2–40.",
     );
   });
 
@@ -232,7 +232,10 @@ describe("decision presentation", () => {
         street: "flop",
         currentBet: 0,
         toCall: 0,
-        legalActions: [{ type: "check" }, { type: "bet", min: 2, max: 40 }],
+        legalActions: [
+          { type: "check" },
+          { type: "bet", minTotal: 2, maxTotal: 40 },
+        ],
         players: situation().players.map((player) => ({
           ...player,
           committedThisStreet: 0,

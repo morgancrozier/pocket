@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createReadPokerTools,
   createSuggestActionTool,
+  type PokerToolActivityEvent,
 } from "@/lib/webmcp/poker-tools";
 import type {
   AgentSuggestion,
@@ -14,6 +15,18 @@ import type {
 } from "@/types/poker";
 
 export type WebMCPSupportState = "checking" | "available" | "unavailable" | "error";
+
+export interface PokerToolActivityReceipt {
+  id: number;
+  tool: PokerToolActivityEvent["tool"];
+  status: "completed" | "rejected";
+  message?: string;
+}
+
+export interface PokerToolActivityState {
+  activeTool: PokerToolActivityEvent["tool"] | null;
+  receipts: PokerToolActivityReceipt[];
+}
 
 interface UsePokerToolsInput {
   situation: PokerSituation | null;
@@ -42,18 +55,47 @@ export function usePokerTools({
   observedRevision,
   isRevisionCurrent,
 }: UsePokerToolsInput) {
-  const [supportState, setSupportState] = useState<WebMCPSupportState>("checking");
-  const [registrationError, setRegistrationError] = useState<string | null>(null);
+  const [availabilityState, setAvailabilityState] =
+    useState<WebMCPSupportState>("checking");
+  const [readRegistrationError, setReadRegistrationError] = useState<
+    string | null
+  >(null);
+  const [suggestionRegistrationError, setSuggestionRegistrationError] =
+    useState<string | null>(null);
 
   const situationRef = useRef(situation);
   const historyRef = useRef(handHistory);
   const suggestionHandlerRef = useRef(onSuggestion);
   const revisionCurrentRef = useRef(isRevisionCurrent);
+  const activitySequenceRef = useRef(0);
+  const [activity, setActivity] = useState<PokerToolActivityState>({
+    activeTool: null,
+    receipts: [],
+  });
 
   situationRef.current = situation;
   historyRef.current = handHistory;
   suggestionHandlerRef.current = onSuggestion;
   revisionCurrentRef.current = isRevisionCurrent;
+
+  const recordActivity = useCallback((event: PokerToolActivityEvent) => {
+    if (event.phase === "started") {
+      setActivity((current) => ({ ...current, activeTool: event.tool }));
+      return;
+    }
+
+    activitySequenceRef.current += 1;
+    const receipt: PokerToolActivityReceipt = {
+      id: activitySequenceRef.current,
+      tool: event.tool,
+      status: event.phase,
+      message: event.message,
+    };
+    setActivity((current) => ({
+      activeTool: current.activeTool === event.tool ? null : current.activeTool,
+      receipts: [receipt, ...current.receipts].slice(0, 3),
+    }));
+  }, []);
 
   const hasSituation = situation !== null;
   const isYourTurn = situation?.isYourTurn ?? false;
@@ -68,13 +110,14 @@ export function usePokerTools({
 
   useEffect(() => {
     if (!hasSituation) {
-      setSupportState("checking");
-      setRegistrationError(null);
+      setAvailabilityState("checking");
+      setReadRegistrationError(null);
       return;
     }
 
     if (!hasWebMCP()) {
-      setSupportState("unavailable");
+      setAvailabilityState("unavailable");
+      setReadRegistrationError(null);
       return;
     }
 
@@ -86,6 +129,7 @@ export function usePokerTools({
         const tools = createReadPokerTools({
           getSituation: () => situationRef.current,
           getHandHistory: () => historyRef.current,
+          onActivity: recordActivity,
           getRoomContext: () =>
             roomPhase
               ? { roomPhase, viewerStatus }
@@ -99,15 +143,14 @@ export function usePokerTools({
         }
 
         if (active) {
-          setSupportState("available");
-          setRegistrationError(null);
+          setAvailabilityState("available");
+          setReadRegistrationError(null);
         }
       } catch (error) {
         if (controller.signal.aborted) return;
         controller.abort();
         if (active) {
-          setSupportState("error");
-          setRegistrationError(
+          setReadRegistrationError(
             error instanceof Error ? error.message : "WebMCP registration failed.",
           );
         }
@@ -130,6 +173,7 @@ export function usePokerTools({
       !canSuggest ||
       !hasWebMCP()
     ) {
+      setSuggestionRegistrationError(null);
       return;
     }
 
@@ -142,15 +186,17 @@ export function usePokerTools({
           getSituation: () => situationRef.current,
           onSuggestion: (suggestion) =>
             suggestionHandlerRef.current(suggestion),
+          onActivity: recordActivity,
           isRevisionCurrent: () => revisionCurrentRef.current?.() ?? true,
         });
 
         await document.modelContext.registerTool(tool, {
           signal: controller.signal,
         });
+        if (active) setSuggestionRegistrationError(null);
       } catch (error) {
         if (controller.signal.aborted || !active) return;
-        setRegistrationError(
+        setSuggestionRegistrationError(
           error instanceof Error
             ? error.message
             : "suggest_action registration failed.",
@@ -174,8 +220,15 @@ export function usePokerTools({
     stateVersion,
   ]);
 
+  const registrationError =
+    suggestionRegistrationError ?? readRegistrationError;
+  const supportState: WebMCPSupportState = registrationError
+    ? "error"
+    : availabilityState;
+
   return {
     supportState,
     registrationError,
+    activity,
   };
 }

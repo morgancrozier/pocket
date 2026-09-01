@@ -37,13 +37,14 @@ test("the choice-first launcher stays idle and preserves setup drafts", async ({
 
   await expect(page.getByRole("heading", { name: "Pocket" })).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Choose how you want to play." }),
+    page.getByRole("heading", { name: "Bring your own AI to the table." }),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: /Play with Bots/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /Host a Game/ })).toBeVisible();
   await expect(
     page.getByRole("button", { name: /Join with a Code/ }),
   ).toBeVisible();
+  await expect(page.getByRole("link", { name: "About Pocket" })).toBeVisible();
   await expect(page.locator(".game-shell, .poker-table")).toHaveCount(0);
   expect(
     await page.evaluate(async () =>
@@ -95,19 +96,75 @@ test("the choice-first launcher stays idle and preserves setup drafts", async ({
   expect(hasOverflow).toBe(false);
 });
 
-test("Play with Bots opens the existing tournament route", async ({ page }) => {
-  await page.route("**/api/games/demo/state", (route) =>
+test("the About page explains WebMCP without initializing a seat", async ({
+  page,
+}) => {
+  await installWebMCPStub(page);
+  const requests: string[] = [];
+  page.on("request", (request) => requests.push(request.url()));
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  await page.getByRole("link", { name: "About Pocket" }).click();
+
+  await expect(page).toHaveURL(/\/about$/);
+  await expect(
+    page.getByRole("heading", {
+      level: 1,
+      name: "Every seat has two minds.",
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Useful access. Deliberate limits." }),
+  ).toBeVisible();
+  await expect(page.getByText("No poker execution tools.")).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "Poker is the environment. Agent-native interaction is the experiment.",
+    }),
+  ).toBeVisible();
+  await expect(page.locator(".game-shell, .poker-table")).toHaveCount(0);
+  expect(
+    await page.evaluate(async () =>
+      (await document.modelContext.getTools()).map((tool) => tool.name),
+    ),
+  ).toEqual([]);
+  expect(requests.some((url) => url.includes("/api/games/demo/"))).toBe(false);
+  expect(requests.some((url) => url.includes("/api/rooms"))).toBe(false);
+  expect(requests.some((url) => url.includes("/auth/v1/signup"))).toBe(false);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const hasOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  );
+  expect(hasOverflow).toBe(false);
+  await expect(page.getByRole("link", { name: "Play with bots" }).last()).toBeVisible();
+});
+
+test("Play with Bots opens the prepared judge tournament route", async ({ page }) => {
+  await page.route("**/api/games/demo/state**", (route) =>
     route.fulfill({ status: 200, json: INITIAL_SITUATION }),
   );
   await page.goto("/");
   await page.getByRole("link", { name: /Play with Bots/ }).click();
-  await expect(page).toHaveURL(/\/play$/);
+  await expect(page).toHaveURL(
+    /\/play\?demo=judge&run=[0-9a-f-]{36}$/,
+  );
+  const firstJudgeRun = page.url();
   await expect(page.getByRole("heading", { name: "Pocket" })).toBeVisible();
   await expect(page.locator(".poker-table")).toBeVisible();
+  await page.reload();
+  await expect(page).toHaveURL(firstJudgeRun);
   await page.getByRole("link", { name: "Pocket home" }).click();
   await expect(page).toHaveURL(/\/$/);
+  await page.getByRole("link", { name: /Play with Bots/ }).click();
+  await expect(page).toHaveURL(
+    /\/play\?demo=judge&run=[0-9a-f-]{36}$/,
+  );
+  expect(page.url()).not.toBe(firstJudgeRun);
+  await page.getByRole("link", { name: "Pocket home" }).click();
   await expect(
-    page.getByRole("heading", { name: "Choose how you want to play." }),
+    page.getByRole("heading", { name: "Bring your own AI to the table." }),
   ).toBeVisible();
 });
 

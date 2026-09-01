@@ -15,6 +15,8 @@ vi.mock("@/lib/poker/demo-session", async (importOriginal) => {
 
 vi.mock("@/lib/poker/demo-game-store", () => ({
   getDemoGameStore: () => ({ restartGame: mocks.restartGame }),
+  parseDemoGameMode: () => "standard",
+  parseJudgeDemoRun: () => null,
 }));
 
 import { POST } from "./route";

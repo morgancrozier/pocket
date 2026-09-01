@@ -31,8 +31,8 @@ function maximumIntent(situation: PokerSituation): PokerActionIntent {
   const sized = situation.legalActions.find(
     (action) => action.type === "bet" || action.type === "raise",
   );
-  if (sized && typeof sized.max === "number") {
-    return { action: sized.type, amount: sized.max };
+  if (sized && typeof sized.maxTotal === "number") {
+    return { action: sized.type, amount: sized.maxTotal };
   }
   return passiveIntent(situation);
 }
@@ -144,6 +144,17 @@ describe("Gate 3 multiplayer room", () => {
 
     const active = await service.start("ROOMTEST", "creator-user", 2);
     expect(active.room.phase).toBe("active");
+    const recoveredStart = await service.start(
+      "ROOMTEST",
+      "creator-user",
+      2,
+    );
+    expect(recoveredStart.operation).toMatchObject({
+      id: "start:2",
+      status: "replayed",
+      resultRevision: active.room.revision,
+    });
+    expect(recoveredStart.room).toEqual(active.room);
     await expect(
       service.join("ROOMTEST", "third-user", "Third"),
     ).rejects.toMatchObject({ code: "ROOM_ALREADY_STARTED" });

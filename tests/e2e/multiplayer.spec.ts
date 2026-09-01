@@ -186,7 +186,9 @@ test("real two-browser room remains seat-safe through spectating and restart", a
     await pageB.locator("#join-room-code").fill("ZZZZZZZZ");
     await pageB.locator("#join-display-name-home").fill("Morgan");
     await pageB.getByRole("button", { name: "Join table" }).click();
-    await expect(pageB.getByText("That Pocket room does not exist.")).toBeVisible();
+    await expect(
+      pageB.getByText("That Pocket room does not exist."),
+    ).toBeVisible({ timeout: 15_000 });
     await expect(pageB).toHaveURL(/\/$/);
     await pageB.locator("#join-room-code").fill(roomCode);
     await pageB.getByRole("button", { name: "Join table" }).click();
@@ -207,8 +209,25 @@ test("real two-browser room remains seat-safe through spectating and restart", a
       pageA.locator('.waiting-seat[data-human="true"]'),
     ).toHaveCount(2, { timeout: 15_000 });
 
+    let delayedCommittedStart = false;
+    await pageA.route(`**/api/rooms/${roomCode}/start`, async (route) => {
+      if (delayedCommittedStart) {
+        await route.continue();
+        return;
+      }
+      delayedCommittedStart = true;
+      const response = await route.fetch();
+      await new Promise((resolve) => setTimeout(resolve, 7_500));
+      await route.fulfill({ response }).catch(() => {
+        // The client intentionally aborts first, then reconciles from state.
+      });
+    });
+
     await pageA.getByRole("button", { name: "Start table" }).click();
-    await expect(pageA.getByText(/Revision \d+/)).toBeVisible();
+    await expect(pageA.getByLabel(/^Poker table,/)).toBeVisible({
+      timeout: 15_000,
+    });
+    expect(delayedCommittedStart).toBe(true);
     const owner = playing(await getRoom(pageA, roomCode));
     await waitForRevision(pageB, roomCode, owner.revision);
     const guest = playing(await getRoom(pageB, roomCode));
@@ -280,9 +299,9 @@ test("real two-browser room remains seat-safe through spectating and restart", a
       .toBeGreaterThan(owner.revision);
     const afterClickedAction = playing(await getRoom(actingPage, roomCode));
     await waitForRevision(observingPage, roomCode, afterClickedAction.revision);
-    await expect(
-      observingPage.getByText(`Revision ${afterClickedAction.revision}`),
-    ).toBeVisible();
+    await expect(observingPage.locator(".decision-summary")).toContainText(
+      `Pot ${afterClickedAction.situation.pot}`,
+    );
     expect(
       afterClickedAction.situation.currentActorId === null ||
         [owner.viewer.playerId, guest.viewer.playerId].includes(
@@ -332,8 +351,8 @@ test("real two-browser room remains seat-safe through spectating and restart", a
       pageA.goto(`/table/${roomCode}`),
       pageB.goto(`/table/${roomCode}`),
     ]);
-    await expect(pageA.getByText(/Revision \d+/)).toBeVisible();
-    await expect(pageB.getByText(/Revision \d+/)).toBeVisible();
+    await expect(pageA.getByLabel(/^Poker table,/)).toBeVisible();
+    await expect(pageB.getByLabel(/^Poker table,/)).toBeVisible();
     expect((await getRoom(pageA, roomCode)).viewer.playerId).toBe(stableOwnerId);
     expect((await getRoom(pageB, roomCode)).viewer.playerId).toBe(stableGuestId);
 
@@ -354,7 +373,9 @@ test("real two-browser room remains seat-safe through spectating and restart", a
           .poll(() => toolNames(spectator.page))
           .toEqual(["get_current_situation", "get_hand_history"]);
         await expect(
-          spectator.page.getByRole("heading", { name: "Spectator tools ready" }),
+          spectator.page
+            .getByLabel("Private copilot and current hand")
+            .getByRole("heading", { name: "WebMCP tools ready" }),
         ).toBeVisible({ timeout: 15_000 });
         await expect
           .poll(async () => {
@@ -405,7 +426,7 @@ test("real two-browser room remains seat-safe through spectating and restart", a
         actor.situation.legalActions.find((action) => action.type === "call") ??
         actor.situation.legalActions.find((action) => action.type === "fold");
       const intent = sized
-        ? { action: sized.type, amount: sized.max }
+        ? { action: sized.type, amount: sized.maxTotal }
         : fallback
           ? { action: fallback.type }
           : null;

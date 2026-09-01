@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Route } from "@playwright/test";
 
 const anonymousUserByPage = new WeakMap<Page, Promise<string>>();
 
@@ -76,7 +76,7 @@ const initialSituation = {
   legalActions: [
     { type: "fold" },
     { type: "call", amount: 4 },
-    { type: "raise", min: 8, max: 32 },
+    { type: "raise", minTotal: 8, maxTotal: 32 },
   ],
   players: [
     {
@@ -194,7 +194,7 @@ const restartedSituation = {
   legalActions: [
     { type: "fold" },
     { type: "call", amount: 2 },
-    { type: "raise", min: 4, max: 40 },
+    { type: "raise", minTotal: 4, maxTotal: 40 },
   ],
   players: [
     { ...initialSituation.players[0], stack: 40, committedThisStreet: 0 },
@@ -220,9 +220,13 @@ const restartedSituation = {
   gameResult: null,
 };
 
-async function installWebMCPStub(page: Page) {
-  await page.addInitScript(() => {
+async function installWebMCPStub(
+  page: Page,
+  options: { failSuggestionOnce?: boolean } = {},
+) {
+  await page.addInitScript(({ failSuggestionOnce }) => {
     const tools = new Map<string, { name: string; execute: (input: object) => unknown }>();
+    let suggestionFailed = false;
     Object.defineProperty(document, "modelContext", {
       configurable: true,
       value: {
@@ -230,6 +234,14 @@ async function installWebMCPStub(page: Page) {
           tool: { name: string; execute: (input: object) => unknown },
           options?: { signal?: AbortSignal },
         ) {
+          if (
+            failSuggestionOnce &&
+            tool.name === "suggest_action" &&
+            !suggestionFailed
+          ) {
+            suggestionFailed = true;
+            throw new Error("suggest_action registration failed for test.");
+          }
           tools.set(tool.name, tool);
           options?.signal?.addEventListener(
             "abort",
@@ -249,20 +261,117 @@ async function installWebMCPStub(page: Page) {
         },
       },
     });
-  });
+  }, options);
 }
 
 async function suggest(
   page: Page,
   input: { action: string; amount?: number; confidence?: number },
 ) {
-  await page.evaluate(async (suggestionInput) => {
+  return page.evaluate(async (suggestionInput) => {
     const tools = await document.modelContext.getTools();
     const suggestion = tools.find((tool) => tool.name === "suggest_action");
     if (!suggestion) throw new Error("suggest_action was not registered.");
-    await document.modelContext.executeTool(suggestion, suggestionInput);
+    const result = await document.modelContext.executeTool(
+      suggestion,
+      suggestionInput,
+    );
+    return JSON.parse(String(result)) as {
+      ok: boolean;
+      error?: { code?: string; recovery?: string };
+    };
   }, input);
 }
+
+test("an invalid sized WebMCP recommendation returns recovery and a valid retry renders", async ({
+  page,
+}) => {
+  await installWebMCPStub(page);
+  await page.route("**/api/games/demo/state", (route) =>
+    route.fulfill({ status: 200, json: initialSituation }),
+  );
+
+  await page.goto("/play");
+  await expect(page.locator("header .status-pill")).toHaveText(
+    "WebMCP tools ready",
+  );
+
+  const invalid = await suggest(page, { action: "raise", amount: 7 });
+  expect(invalid).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_AMOUNT",
+      recovery: expect.stringContaining("get_current_situation"),
+    },
+  });
+  await expect(page.getByText("Your copilot suggests")).toHaveCount(0);
+
+  const recovered = await suggest(page, { action: "raise", amount: 12 });
+  expect(recovered).toMatchObject({ ok: true });
+  await expect(page.getByText("Your copilot suggests")).toBeVisible();
+  await expect(page.locator(".suggestion-action")).toHaveText("Raise to 12");
+});
+
+test("practice fallback is explicit and can retry the authoritative table", async ({
+  page,
+}) => {
+  let stateRequests = 0;
+  await installWebMCPStub(page);
+  const failState = async (route: Route) => {
+    stateRequests += 1;
+    await route.fulfill({
+      status: 503,
+      json: { error: { message: "Live table unavailable." } },
+    });
+  };
+  await page.route("**/api/games/demo/state", failState);
+
+  await page.goto("/play");
+  await expect(page.locator("header .status-pill")).toHaveText(
+    "Practice fallback · WebMCP tools ready",
+  );
+  await expect(page.getByRole("button", { name: "Retry live table" })).toBeVisible();
+
+  await page.unroute("**/api/games/demo/state", failState);
+  await page.route("**/api/games/demo/state", async (route) => {
+    stateRequests += 1;
+    await route.fulfill({ status: 200, json: initialSituation });
+  });
+  await page.getByRole("button", { name: "Retry live table" }).click();
+  await expect(page.locator("header .status-pill")).toHaveText(
+    "WebMCP tools ready",
+  );
+  await expect(page.getByText("Practice fallback", { exact: false })).toHaveCount(0);
+  expect(stateRequests).toBeGreaterThanOrEqual(2);
+});
+
+test("suggestion registration failure degrades status and later success clears it", async ({
+  page,
+}) => {
+  await installWebMCPStub(page, { failSuggestionOnce: true });
+  await page.route("**/api/games/demo/state", (route) =>
+    route.fulfill({ status: 200, json: initialSituation }),
+  );
+  await page.route("**/api/games/demo/action", (route) =>
+    route.fulfill({
+      status: 200,
+      json: { ...initialSituation, stateVersion: 19 },
+    }),
+  );
+
+  await page.goto("/play");
+  await expect(page.locator(".status-pill")).toContainText(
+    "WebMCP needs attention",
+  );
+
+  await page.getByRole("button", { name: "Call 4" }).click();
+  await expect(page.locator(".status-pill")).toContainText(
+    "WebMCP tools ready",
+  );
+  await expect(page.locator(".status-pill")).not.toContainText(
+    "WebMCP needs attention",
+  );
+});
 
 test("safe tournament UI replaces and follows advice through restart", async ({
   page,
@@ -293,18 +402,24 @@ test("safe tournament UI replaces and follows advice through restart", async ({
 
   await page.setViewportSize({ width: 960, height: 900 });
   await page.goto("/play");
-  await expect(page.getByText("WebMCP ready")).toBeVisible();
+  await expect(page.locator("header .status-pill")).toHaveText(
+    "WebMCP tools ready",
+  );
   await expect(page.getByText("Blinds 2/4", { exact: false }).first()).toBeVisible();
-  await expect(page.getByText("4 remaining", { exact: false })).toBeVisible();
-  await expect(page.getByText("Seat-safe advice only.")).toBeVisible();
+  await expect(page.locator(".player-seat")).toHaveCount(4);
+  await page
+    .getByRole("button", { name: /Awaiting a recommendation.*WebMCP tools ready/ })
+    .click();
+  await expect(page.getByText("Your agent recommends. You decide.")).toBeVisible();
+  await page.locator(".companion-rail-mobile-header button").click();
 
-  const amount = page.getByLabel("Raise amount", { exact: false });
+  const amount = page.getByLabel("Raise to", { exact: false });
   await expect(amount).toHaveValue("8");
   await amount.fill("");
   await expect(amount).toHaveValue("");
   await amount.fill("1");
   await amount.press("Enter");
-  await expect(page.getByText("Minimum is 8 chips.")).toBeVisible();
+  await expect(page.getByText("Minimum total is 8 chips.")).toBeVisible();
   await expect(amount).toHaveValue("1");
   expect(actionBodies).toHaveLength(0);
 
@@ -317,8 +432,11 @@ test("safe tournament UI replaces and follows advice through restart", async ({
     amount: 12,
     confidence: 0.8,
   });
+  await page
+    .getByRole("button", { name: /Raise to 12.*WebMCP tools ready/ })
+    .click();
   await expect(page.getByText("Your copilot suggests")).toBeVisible();
-  await expect(page.getByText("Raise to 12", { exact: true })).toBeVisible();
+  await expect(page.locator(".suggestion-action")).toHaveText("Raise to 12");
   await expect(page.getByText("80% confidence")).toBeVisible();
   expect(actionBodies).toHaveLength(0);
 
@@ -351,11 +469,16 @@ test("safe tournament UI replaces and follows advice through restart", async ({
     )
     .not.toContain("suggest_action");
 
+  await page.locator(".companion-rail-mobile-header button").click();
   await page.getByRole("button", { name: "Play again" }).click();
   await expect(page.getByText("Hand 1", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Blinds 1/2", { exact: false }).first()).toBeVisible();
   await expect(page.getByText("Recommendation followed")).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Ask your copilot" })).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: /Awaiting a recommendation.*WebMCP tools ready/,
+    }),
+  ).toBeVisible();
   expect(restartBodies).toEqual([{ expectedStateVersion: 24 }]);
 
   await page.setViewportSize({ width: 400, height: 860 });
@@ -405,19 +528,31 @@ test("rejected actions do not create receipts and accepted overrides do", async 
 
   await page.setViewportSize({ width: 960, height: 900 });
   await page.goto("/play");
-  await expect(page.getByText("WebMCP ready")).toBeVisible();
+  await expect(page.locator("header .status-pill")).toHaveText(
+    "WebMCP tools ready",
+  );
   await suggest(page, { action: "raise", amount: 12, confidence: 0.8 });
+  await page
+    .getByRole("button", { name: /Raise to 12.*WebMCP tools ready/ })
+    .click();
+  await expect(page.getByText("Your copilot suggests")).toBeVisible();
+  await page.locator(".companion-rail-mobile-header button").click();
 
-  const amount = page.getByLabel("Raise amount", { exact: false });
+  const amount = page.getByLabel("Raise to", { exact: false });
   await amount.fill("16");
   await page.getByRole("button", { name: "Raise", exact: true }).click();
 
-  await expect(page.getByText("Your copilot suggests")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Raise to 12.*WebMCP tools ready/ }),
+  ).toBeVisible();
   await expect(page.getByText("Recommendation followed")).toHaveCount(0);
   await expect(page.getByText("You overrode your copilot")).toHaveCount(0);
   expect(actionBodies).toHaveLength(1);
 
   await page.getByRole("button", { name: "Raise", exact: true }).click();
+  await page
+    .getByRole("button", { name: /Recommendation overridden.*WebMCP tools ready/ })
+    .click();
   await expect(
     page.getByRole("heading", { name: "You overrode your copilot" }),
   ).toBeVisible();

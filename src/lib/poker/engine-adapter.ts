@@ -443,9 +443,17 @@ function mapLegalAction(action: EngineLegalAction): LegalAction {
     case "call":
       return { type: "call", amount: action.amount };
     case "bet-to":
-      return { type: "bet", min: action.minAmount, max: action.maxAmount };
+      return {
+        type: "bet",
+        minTotal: action.minAmount,
+        maxTotal: action.maxAmount,
+      };
     case "raise-to":
-      return { type: "raise", min: action.minAmount, max: action.maxAmount };
+      return {
+        type: "raise",
+        minTotal: action.minAmount,
+        maxTotal: action.maxAmount,
+      };
   }
 }
 

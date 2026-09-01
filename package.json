@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
-  "description": "A WebMCP-native Texas Hold'em table where personal agents advise and humans play.",
+  "description": "A multiplayer poker experiment where every player can bring their own AI agent into the same live game.",
   "engines": {
     "node": ">=22"
   },

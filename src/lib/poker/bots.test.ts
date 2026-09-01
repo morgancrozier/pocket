@@ -15,11 +15,11 @@ function decision(
       ? [
           { type: "fold" },
           { type: "call", amount: 4 },
-          { type: "raise", min: 8, max: 37 },
+          { type: "raise", minTotal: 8, maxTotal: 37 },
         ]
       : [
           { type: "check" },
-          { type: "bet", min: 2, max: 39 },
+          { type: "bet", minTotal: 2, maxTotal: 39 },
         ],
   };
 }

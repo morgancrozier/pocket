@@ -2,6 +2,30 @@ import { describe, expect, it } from "vitest";
 import { createDemoGame, DEMO_HERO_ID } from "./demo-game";
 
 describe("Gate 2 demo game", () => {
+  it("opens the prepared judge path on an engine-backed flop decision", async () => {
+    const game = createDemoGame({ preparedJudgeDemo: true });
+    const situation = await game.getSituation(DEMO_HERO_ID);
+
+    expect(situation).toMatchObject({
+      handNumber: 1,
+      stateVersion: 8,
+      street: "flop",
+      isYourTurn: true,
+      currentActorId: DEMO_HERO_ID,
+      yourCards: ["8h", "Td"],
+      board: ["Jd", "6d", "9s"],
+      pot: 16,
+      currentBet: 8,
+      toCall: 8,
+      legalActions: [
+        { type: "fold" },
+        { type: "call", amount: 8 },
+        { type: "raise", minTotal: 16, maxTotal: 38 },
+      ],
+    });
+    expect(JSON.stringify(situation)).not.toContain('"holeCards"');
+  });
+
   it("settles a complete human-and-bot hand with chips conserved", async () => {
     const game = createDemoGame({ deterministicSeed: 42 });
     const initialTotal = await game.getChipTotal();
@@ -80,11 +104,11 @@ describe("Gate 2 demo game", () => {
       (action) => action.type === "raise",
     );
 
-    expect(raise?.max).toBeDefined();
+    expect(raise?.maxTotal).toBeDefined();
     const settled = await game.act({
       actorId: DEMO_HERO_ID,
       expectedStateVersion: beforeShove.stateVersion,
-      intent: { action: "raise", amount: raise!.max },
+      intent: { action: "raise", amount: raise!.maxTotal },
     });
 
     expect(settled.handResult).not.toBeNull();

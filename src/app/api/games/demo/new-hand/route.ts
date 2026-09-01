@@ -5,7 +5,11 @@ import {
   nextHandRequestSchema,
 } from "@/lib/poker/demo-api";
 import { DEMO_HERO_ID } from "@/lib/poker/demo-game";
-import { getDemoGameStore } from "@/lib/poker/demo-game-store";
+import {
+  getDemoGameStore,
+  parseDemoGameMode,
+  parseJudgeDemoRun,
+} from "@/lib/poker/demo-game-store";
 import { requireDemoUserId } from "@/lib/poker/demo-session";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +34,11 @@ export async function POST(request: NextRequest) {
   if (!parsed.success) return invalidRequestResponse();
 
   try {
-    const situation = await getDemoGameStore(authenticatedUserId).startNextHand({
+    const situation = await getDemoGameStore(
+      authenticatedUserId,
+      parseDemoGameMode(request.nextUrl.searchParams.get("demo")),
+      parseJudgeDemoRun(request.nextUrl.searchParams.get("run")),
+    ).startNextHand({
       actorId: DEMO_HERO_ID,
       expectedStateVersion: parsed.data.expectedStateVersion,
     });

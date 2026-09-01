@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentSuggestionPanel } from "@/components/poker/AgentSuggestionPanel";
-import { DecisionActivity } from "@/components/poker/DecisionActivity";
+import { CompanionRail } from "@/components/poker/CompanionRail";
 import { DebugPanel } from "@/components/poker/DebugPanel";
-import { PlayerSeat } from "@/components/poker/PlayerSeat";
-import { PlayingCard } from "@/components/poker/PlayingCard";
+import { HandActionFeed } from "@/components/poker/HandActionFeed";
+import { HumanActionDock } from "@/components/poker/HumanActionDock";
+import { PokerTableSurface } from "@/components/poker/PokerTableSurface";
 import {
   advanceMockStreet,
   appendEvent,
@@ -51,33 +52,49 @@ function titleCase(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function actionLabel(action: PokerSituation["legalActions"][number]) {
-  const label = titleCase(action.type);
-
-  if (action.type === "call" && typeof action.amount === "number") {
-    return `Call ${action.amount}`;
-  }
-
-  if ((action.type === "bet" || action.type === "raise") && action.min) {
-    return label;
-  }
-
-  return label;
+function supportLabel(
+  supportState: WebMCPSupportState,
+  isPracticeFallback: boolean,
+): string {
+  const label =
+    supportState === "available"
+      ? "WebMCP tools ready"
+      : supportState === "unavailable"
+        ? "WebMCP unavailable"
+        : supportState === "error"
+          ? "WebMCP needs attention"
+          : "Preparing WebMCP";
+  return isPracticeFallback ? `Practice fallback · ${label}` : label;
 }
 
-function supportLabel(supportState: WebMCPSupportState): string {
-  if (supportState === "available") return "WebMCP ready";
-  if (supportState === "unavailable") return "WebMCP unavailable";
-  if (supportState === "error") return "WebMCP needs attention";
-  return "Preparing WebMCP";
+function demoApiUrl(path: string): string {
+  if (typeof window === "undefined") return path;
+  const current = new URLSearchParams(window.location.search);
+  if (current.get("demo") === "judge") {
+    const query = new URLSearchParams({ demo: "judge" });
+    const run = current.get("run");
+    if (run) query.set("run", run);
+    return `${path}?${query.toString()}`;
+  }
+  return path;
+}
+
+function ensureJudgeDemoRun(): void {
+  const url = new URL(window.location.href);
+  if (url.searchParams.get("demo") !== "judge") return;
+  if (url.searchParams.get("run")) return;
+  url.searchParams.set("run", crypto.randomUUID());
+  window.history.replaceState(window.history.state, "", url);
 }
 
 function PocketHeader({
   supportState,
   situation,
+  isPracticeFallback = false,
 }: {
   supportState: WebMCPSupportState;
   situation: PokerSituation | null;
+  isPracticeFallback?: boolean;
 }) {
   return (
     <header className="topbar">
@@ -92,13 +109,17 @@ function PocketHeader({
       <div className="status-stack">
         <span className="status-pill" data-state={supportState}>
           <span className="status-dot" />
-          {supportLabel(supportState)}
+          {supportLabel(supportState, isPracticeFallback)}
         </span>
-        <span className="trust-line">
-          {situation
-            ? `Play money · Blinds ${situation.smallBlind}/${situation.bigBlind} · Hand ${situation.handNumber}`
-            : "Your agent advises. You play."}
-        </span>
+        {situation ? (
+          <span className="header-game-meta">
+            <span>Hand {situation.handNumber}</span>
+            <span aria-hidden="true">·</span>
+            <span>Blinds {situation.smallBlind}/{situation.bigBlind}</span>
+          </span>
+        ) : (
+          <span className="trust-line">Your agent advises. You play.</span>
+        )}
       </div>
     </header>
   );
@@ -184,7 +205,11 @@ function actionPendingMessage(
 export function PocketPrototype() {
   const [situation, setSituation] = useState<PokerSituation | null>(null);
   const [mode, setMode] = useState<DemoMode>("loading");
+  const [isPracticeFallback, setIsPracticeFallback] = useState(false);
+  const [isRetryingLive, setIsRetryingLive] = useState(false);
   const [suggestion, setSuggestion] = useState<AgentSuggestion | null>(null);
+  const [staleSuggestion, setStaleSuggestion] =
+    useState<AgentSuggestion | null>(null);
   const [recommendationReceipt, setRecommendationReceipt] =
     useState<RecommendationReceipt | null>(null);
   const [suggestionPresentationRevision, setSuggestionPresentationRevision] =
@@ -199,8 +224,15 @@ export function PocketPrototype() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextHandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoNextHandVersionRef = useRef<number | null>(null);
+  const suggestionRef = useRef<AgentSuggestion | null>(null);
+  suggestionRef.current = suggestion;
 
-  const clearSuggestion = useCallback(() => {
+  const clearSuggestion = useCallback((preserveAsStale = false) => {
+    if (preserveAsStale && suggestionRef.current) {
+      setStaleSuggestion(suggestionRef.current);
+    } else if (!preserveAsStale) {
+      setStaleSuggestion(null);
+    }
     sessionStorage.removeItem(AGENT_SUGGESTION_STORAGE_KEY);
     setSuggestion(null);
   }, []);
@@ -227,13 +259,14 @@ export function PocketPrototype() {
       if (!situation) return;
       if (!isSuggestionCurrent(situation, next)) return;
       clearRecommendationReceipt();
+      setStaleSuggestion(null);
       setSuggestion(next);
       setSuggestionPresentationRevision((current) => current + 1);
     },
     [clearRecommendationReceipt, situation],
   );
 
-  const { supportState, registrationError } = usePokerTools({
+  const { supportState, registrationError, activity } = usePokerTools({
     situation,
     handHistory: situation?.recentActions ?? [],
     onSuggestion: handleSuggestion,
@@ -241,9 +274,10 @@ export function PocketPrototype() {
 
   const loadEngineSituation = useCallback(async () => {
     await ensureSupabaseBrowserIdentity();
-    const next = await requestSituation("/api/games/demo/state");
+    const next = await requestSituation(demoApiUrl("/api/games/demo/state"));
     setSituation(next);
     setMode("engine");
+    setIsPracticeFallback(false);
     setTableMessage(
       next.gameResult || next.handResult ? resultMessage(next) : null,
     );
@@ -252,12 +286,14 @@ export function PocketPrototype() {
 
   useEffect(() => {
     let active = true;
+    ensureJudgeDemoRun();
     const forceMock = isMockFallbackRequested(window.location.search);
     setShowDebug(isDebugPanelRequested(window.location.search));
 
     if (forceMock) {
       setSituation(INITIAL_SITUATION);
       setMode("mock");
+      setIsPracticeFallback(false);
       setTableMessage(null);
       return () => {
         active = false;
@@ -268,8 +304,9 @@ export function PocketPrototype() {
       if (!active) return;
       setSituation(INITIAL_SITUATION);
       setMode("mock");
+      setIsPracticeFallback(true);
       setTableMessage(
-        "Pocket could not reach the live table, so this practice hand remains available.",
+        "The authoritative live table is unavailable. This is a practice hand only.",
       );
     });
 
@@ -281,6 +318,11 @@ export function PocketPrototype() {
   useEffect(() => {
     if (!situation) return;
 
+    const previous = suggestionRef.current;
+    if (previous && !isSuggestionCurrent(situation, previous)) {
+      setStaleSuggestion(previous);
+    }
+
     const restored = restoreStoredSuggestion(
       sessionStorage.getItem(AGENT_SUGGESTION_STORAGE_KEY),
       situation,
@@ -289,8 +331,8 @@ export function PocketPrototype() {
       sessionStorage.removeItem(AGENT_SUGGESTION_STORAGE_KEY);
     }
 
-    setSuggestion((current) =>
-      current && isSuggestionCurrent(situation, current) ? current : restored,
+    setSuggestion(
+      previous && isSuggestionCurrent(situation, previous) ? previous : restored,
     );
   }, [situation?.gameId, situation?.handNumber, situation?.stateVersion]);
 
@@ -341,10 +383,6 @@ export function PocketPrototype() {
       ) ?? null,
     [situation],
   );
-  const remainingPlayerCount = useMemo(
-    () => situation?.players.filter((player) => player.stack > 0).length ?? 0,
-    [situation],
-  );
   const decisionPresentation = useMemo(
     () =>
       situation
@@ -354,35 +392,11 @@ export function PocketPrototype() {
         : null,
     [situation],
   );
-  const latestHistorySequence = situation?.recentActions.at(-1)?.sequence ?? null;
-  const receiptActionSequence = useMemo(() => {
-    if (!situation || !recommendationReceipt) return null;
-
-    for (let index = situation.recentActions.length - 1; index >= 0; index -= 1) {
-      const event = situation.recentActions[index];
-      if (
-        event.playerId !== situation.yourPlayerId ||
-        event.action !== recommendationReceipt.humanChoice.action
-      ) {
-        continue;
-      }
-
-      if (
-        (event.action === "bet" || event.action === "raise") &&
-        event.amount !== recommendationReceipt.humanChoice.amount
-      ) {
-        continue;
-      }
-
-      return event.sequence;
-    }
-
-    return null;
-  }, [recommendationReceipt, situation]);
-
   useEffect(() => {
     setBetDraft(
-      typeof sizedAction?.min === "number" ? String(sizedAction.min) : "",
+      typeof sizedAction?.minTotal === "number"
+        ? String(sizedAction.minTotal)
+        : "",
     );
     setBetDraftError(null);
   }, [
@@ -390,7 +404,7 @@ export function PocketPrototype() {
     situation?.handNumber,
     situation?.stateVersion,
     sizedAction?.type,
-    sizedAction?.min,
+    sizedAction?.minTotal,
   ]);
 
   const commitMockAction = useCallback(
@@ -486,14 +500,17 @@ export function PocketPrototype() {
       setTableMessage(actionPendingMessage(action, amount, receipt));
 
       try {
-        const next = await requestSituation("/api/games/demo/action", {
+        const next = await requestSituation(
+          demoApiUrl("/api/games/demo/action"),
+          {
           method: "POST",
           body: JSON.stringify({
             action,
             amount,
             expectedStateVersion: situation.stateVersion,
           }),
-        });
+          },
+        );
         clearSuggestion();
         acceptRecommendationReceipt(receipt);
         setSituation(next);
@@ -565,12 +582,18 @@ export function PocketPrototype() {
       setBetDraftError("Enter a whole-chip amount.");
       return;
     }
-    if (typeof sizedAction.min === "number" && amount < sizedAction.min) {
-      setBetDraftError(`Minimum is ${sizedAction.min} chips.`);
+    if (
+      typeof sizedAction.minTotal === "number" &&
+      amount < sizedAction.minTotal
+    ) {
+      setBetDraftError(`Minimum total is ${sizedAction.minTotal} chips.`);
       return;
     }
-    if (typeof sizedAction.max === "number" && amount > sizedAction.max) {
-      setBetDraftError(`Maximum is ${sizedAction.max} chips.`);
+    if (
+      typeof sizedAction.maxTotal === "number" &&
+      amount > sizedAction.maxTotal
+    ) {
+      setBetDraftError(`Maximum total is ${sizedAction.maxTotal} chips.`);
       return;
     }
 
@@ -585,7 +608,7 @@ export function PocketPrototype() {
     setIsSubmitting(true);
     setTableMessage("Dealing the next hand…");
     try {
-      const next = await requestSituation("/api/games/demo/new-hand", {
+      const next = await requestSituation(demoApiUrl("/api/games/demo/new-hand"), {
         method: "POST",
         body: JSON.stringify({ expectedStateVersion: situation.stateVersion }),
       });
@@ -634,7 +657,7 @@ export function PocketPrototype() {
     setTableMessage("Resetting the table…");
 
     try {
-      const next = await requestSituation("/api/games/demo/restart", {
+      const next = await requestSituation(demoApiUrl("/api/games/demo/restart"), {
         method: "POST",
         body: JSON.stringify({ expectedStateVersion: situation.stateVersion }),
       });
@@ -684,6 +707,21 @@ export function PocketPrototype() {
       return;
     }
 
+  }
+
+  async function retryLiveTable() {
+    if (!isPracticeFallback || isRetryingLive) return;
+    setIsRetryingLive(true);
+    setTableMessage("Retrying the authoritative live table…");
+    try {
+      await loadEngineSituation();
+    } catch {
+      setTableMessage(
+        "The authoritative live table is still unavailable. This remains a practice hand only.",
+      );
+    } finally {
+      setIsRetryingLive(false);
+    }
   }
 
   if (!situation) {
@@ -739,222 +777,109 @@ export function PocketPrototype() {
         : currentPlayer
           ? `${currentPlayer.displayName} is acting`
           : "Table paused";
-  const decisionContext = situation.gameResult
-    ? `${remainingPlayerCount} player${remainingPlayerCount === 1 ? "" : "s"} remaining`
-    : situation.isYourTurn
-      ? situation.toCall > 0
-        ? `${situation.toCall} to call`
-        : "Check available"
-      : situation.handResult
-        ? "Settled"
-        : "Waiting";
+  const railRecommendationLabel = visibleSuggestion
+    ? titleCase(describeAction(visibleSuggestion.action, visibleSuggestion.amount))
+    : visibleReceipt
+      ? visibleReceipt.outcome === "followed"
+        ? "Recommendation followed"
+        : "Recommendation overridden"
+      : staleSuggestion
+        ? "Recommendation expired"
+        : supportState === "available"
+          ? "Awaiting a recommendation"
+          : supportState === "unavailable"
+            ? "Copilot unavailable"
+            : supportState === "error"
+              ? "Copilot needs attention"
+              : "Preparing copilot";
 
   return (
     <div className="prototype">
-      <PocketHeader supportState={supportState} situation={situation} />
+      <PocketHeader
+        supportState={supportState}
+        situation={situation}
+        isPracticeFallback={isPracticeFallback}
+      />
 
-      <section className="game-shell">
-        <div className="table-stage">
-          <div className="table-stage-header">
-            <div className="hand-context">
-              <span>Hand {situation.handNumber}</span>
-              <span aria-hidden="true">·</span>
-              <span>{titleCase(situation.street)}</span>
-              <span aria-hidden="true">·</span>
-              <span>Blinds {situation.smallBlind}/{situation.bigBlind}</span>
-              <span aria-hidden="true">·</span>
-              <span>{remainingPlayerCount} remaining</span>
-            </div>
-            <span
-              className={`turn-status ${situation.isYourTurn && !isSubmitting ? "is-active" : ""}`}
-            >
-              {turnTitle}
-            </span>
-          </div>
+      <section className="game-layout game-shell">
+        <div className="game-main">
+          {decisionPresentation ? (
+            <PokerTableSurface
+              situation={situation}
+              presentation={decisionPresentation}
+              turnTitle={turnTitle}
+            />
+          ) : null}
 
-          <div className="poker-table">
-            <div className="table-center">
-              <span className="pot-label">
-                Pot <strong>{situation.pot}</strong>
-              </span>
-              <div className="card-row community-cards">
-                {situation.board.map((card) => (
-                  <PlayingCard key={card} card={card} />
-                ))}
-                {Array.from({
-                  length: Math.max(0, 5 - situation.board.length),
-                }).map((_, index) => (
-                  <span
-                    key={`empty-${index}`}
-                    className="playing-card is-hidden is-empty-slot"
-                    aria-hidden="true"
-                  />
-                ))}
-              </div>
-            </div>
-
-            {situation.players.map((player) => (
-              <PlayerSeat
-                key={player.id}
-                player={player}
-                isCurrent={player.id === situation.currentActorId}
-                isDealer={player.seat === situation.dealerSeat}
-                actionCue={decisionPresentation?.seatCues[player.id]}
-                localCards={
-                  player.id === situation.yourPlayerId
-                    ? situation.yourCards
-                    : undefined
-                }
-              />
-            ))}
-          </div>
+          <HumanActionDock
+            situation={situation}
+            turnTitle={turnTitle}
+            isSubmitting={isSubmitting}
+            notice={tableMessage}
+            betDraft={betDraft}
+            betDraftError={betDraftError}
+            betInputId="bet-amount"
+            practiceFallback={
+              isPracticeFallback
+                ? {
+                    isRetrying: isRetryingLive,
+                    onRetry: () => void retryLiveTable(),
+                  }
+                : null
+            }
+            terminalAction={
+              situation.gameResult
+                ? {
+                    label: "Play again",
+                    onClick: () => {
+                      if (mode === "mock") void resetMockDemo();
+                      else void restartEngineGame();
+                    },
+                  }
+                : situation.handResult
+                  ? {
+                      label: mode === "engine" ? "Next hand" : "Reset hand",
+                      onClick: () => {
+                        if (mode === "mock") void resetMockDemo();
+                        else void startNextEngineHand();
+                      },
+                    }
+                  : null
+            }
+            onBetDraftChange={(value) => {
+              setBetDraft(value);
+              setBetDraftError(null);
+            }}
+            onCommit={commitHumanAction}
+            onSubmitSizedAction={submitSizedAction}
+            onMax={(amount) => {
+              setBetDraft(String(amount));
+              setBetDraftError(null);
+            }}
+          />
         </div>
 
-        <div className="decision-dock">
-          <section
-            className="action-zone"
-            aria-labelledby="decision-title"
-            aria-busy={isSubmitting}
-          >
-            <div className="decision-heading">
-              <h2 id="decision-title">{turnTitle}</h2>
-              <span className="decision-context">{decisionContext}</span>
-            </div>
-            {decisionPresentation ? (
-              <DecisionActivity
-                presentation={decisionPresentation}
-                notice={tableMessage}
-              />
-            ) : null}
-            <div className="action-buttons">
-              {situation.legalActions
-                .filter(
-                  (action) => action.type !== "bet" && action.type !== "raise",
-                )
-                .map((action) => (
-                <button
-                  key={action.type}
-                  className={`action-button action-${action.type}`}
-                  disabled={!situation.isYourTurn || isSubmitting}
-                  onClick={() => commitHumanAction(action.type, action.amount)}
-                >
-                  {actionLabel(action)}
-                </button>
-                ))}
-              {sizedAction ? (
-                <form
-                  className="sized-action"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    submitSizedAction();
-                  }}
-                >
-                  <label htmlFor="bet-amount">
-                    {titleCase(sizedAction.type)} amount
-                    <span>
-                      Min {sizedAction.min} · Max {sizedAction.max}
-                    </span>
-                  </label>
-                  <div className="sized-action-entry">
-                    <input
-                      id="bet-amount"
-                      name="betAmount"
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      autoComplete="off"
-                      value={betDraft}
-                      disabled={!situation.isYourTurn || isSubmitting}
-                      aria-invalid={Boolean(betDraftError)}
-                      aria-describedby={
-                        betDraftError ? "bet-amount-error" : "bet-amount-range"
-                      }
-                      onChange={(event) => {
-                        setBetDraft(event.target.value);
-                        setBetDraftError(null);
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="secondary-button max-button"
-                      disabled={
-                        !situation.isYourTurn ||
-                        isSubmitting ||
-                        typeof sizedAction.max !== "number"
-                      }
-                      onClick={() => {
-                        if (typeof sizedAction.max === "number") {
-                          setBetDraft(String(sizedAction.max));
-                          setBetDraftError(null);
-                        }
-                      }}
-                    >
-                      Max
-                    </button>
-                    <button
-                      type="submit"
-                      className={`action-button action-${sizedAction.type}`}
-                      disabled={!situation.isYourTurn || isSubmitting}
-                    >
-                      {titleCase(sizedAction.type)}
-                    </button>
-                  </div>
-                  <span id="bet-amount-range" className="sr-only">
-                    Legal range {sizedAction.min} to {sizedAction.max} chips.
-                  </span>
-                  {betDraftError ? (
-                    <span
-                      id="bet-amount-error"
-                      className="field-error"
-                      role="alert"
-                    >
-                      {betDraftError}
-                    </span>
-                  ) : null}
-                </form>
-              ) : null}
-              {situation.gameResult ? (
-                <button
-                  className="action-button action-restart"
-                  disabled={isSubmitting}
-                  onClick={() => {
-                    if (mode === "mock") {
-                      void resetMockDemo();
-                    } else {
-                      void restartEngineGame();
-                    }
-                  }}
-                >
-                  Play again
-                </button>
-              ) : situation.legalActions.length === 0 ? (
-                <button
-                  className="action-button action-next"
-                  disabled={isSubmitting}
-                  onClick={() =>
-                    mode === "mock"
-                      ? void resetMockDemo()
-                      : void startNextEngineHand()
-                  }
-                >
-                  {mode === "engine" ? "Next hand" : "Reset hand"}
-                </button>
-              ) : null}
-            </div>
-          </section>
-
+        <CompanionRail
+          statusLabel={supportLabel(supportState, isPracticeFallback)}
+          recommendationLabel={railRecommendationLabel}
+        >
           <AgentSuggestionPanel
             key={
               visibleSuggestion
                 ? `suggestion-${suggestionPresentationRevision}`
                 : visibleReceipt
                   ? `receipt-${visibleReceipt.handNumber}-${visibleReceipt.sourceStateVersion}-${visibleReceipt.outcome}`
-                  : `empty-${supportState}`
+                  : staleSuggestion
+                    ? `stale-${staleSuggestion.handNumber}-${staleSuggestion.stateVersion}`
+                    : `empty-${supportState}`
             }
             suggestion={visibleSuggestion}
+            staleSuggestion={staleSuggestion}
             receipt={visibleReceipt}
             situation={situation}
             supportState={supportState}
+            activity={activity}
+            registrationError={registrationError}
             isSubmitting={isSubmitting}
             onUse={useSuggestion}
             onDismiss={() => {
@@ -962,55 +887,8 @@ export function PocketPrototype() {
               setTableMessage("Suggestion dismissed. Choose any legal action.");
             }}
           />
-        </div>
-      </section>
-
-      <section className="history-card" aria-labelledby="history-title">
-        <div className="card-heading">
-          <h2 id="history-title">Hand activity</h2>
-          <span>
-            Hand {situation.handNumber} · {titleCase(situation.street)}
-          </span>
-        </div>
-        {situation.recentActions.length > 0 ? (
-          <ol className="history-list">
-            {situation.recentActions.slice(-6).map((event) => (
-              <li
-                className={`history-item ${event.sequence === latestHistorySequence ? "is-latest" : ""}`}
-                key={event.sequence}
-                aria-current={
-                  event.sequence === latestHistorySequence
-                    ? "true"
-                    : undefined
-                }
-              >
-                <span className="history-item-meta">
-                  <span className="history-street">{event.street}</span>
-                  {event.sequence === latestHistorySequence ? (
-                    <span className="history-latest">Latest</span>
-                  ) : null}
-                </span>
-                <strong>
-                  {event.playerId === situation.yourPlayerId
-                    ? "You"
-                    : event.playerName}
-                </strong>
-                <span className="history-action">
-                  <span>{describeAction(event.action, event.amount)}</span>
-                  {event.sequence === receiptActionSequence && visibleReceipt ? (
-                    <span
-                      className={`history-recommendation history-recommendation-${visibleReceipt.outcome}`}
-                    >
-                      {visibleReceipt.outcome}
-                    </span>
-                  ) : null}
-                </span>
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p className="history-empty">The first action will appear here.</p>
-        )}
+          <HandActionFeed situation={situation} receipt={visibleReceipt} />
+        </CompanionRail>
       </section>
 
       {showDebug ? (

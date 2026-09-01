@@ -1,22 +1,138 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+async function installWebMCPStub(page: Page) {
+  await page.addInitScript(() => {
+    const tools = new Map<string, WebMCPTool>();
+    Object.defineProperty(document, "modelContext", {
+      configurable: true,
+      value: {
+        async registerTool(
+          tool: WebMCPTool,
+          options?: { signal?: AbortSignal },
+        ) {
+          tools.set(tool.name, tool);
+          options?.signal?.addEventListener(
+            "abort",
+            () => {
+              if (tools.get(tool.name) === tool) tools.delete(tool.name);
+            },
+            { once: true },
+          );
+        },
+        async getTools() {
+          return [...tools.values()];
+        },
+        async executeTool(tool: WebMCPTool, input: Record<string, unknown>) {
+          const registered = tools.get(tool.name);
+          if (!registered) throw new Error(`Tool ${tool.name} is unavailable.`);
+          return registered.execute(input);
+        },
+      },
+    });
+  });
+}
 
 test.describe("in-game activity clarity", () => {
-  test("keeps the latest actions and legal mechanics beside the controls", async ({
+  test("shows an unavailable copilot truthfully without inventing activity", async ({
+    page,
+  }) => {
+    await page.goto("/play?mode=mock");
+
+    await expect(page.getByText("WebMCP unavailable").first()).toBeVisible();
+    await expect(page.getByText("Seat-safe connection")).toHaveCount(0);
+    await expect(page.locator(".copilot-activity li")).toHaveCount(0);
+  });
+
+  test("renders real reading, rejection, and recommendation receipts without playing", async ({
+    page,
+  }) => {
+    await installWebMCPStub(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/play?mode=mock");
+    await expect(page.getByText("WebMCP tools ready").first()).toBeVisible();
+
+    const initialVersion = await page.evaluate(() =>
+      JSON.parse(sessionStorage.getItem("pocket-agent-suggestion") ?? "null"),
+    );
+    expect(initialVersion).toBeNull();
+
+    await page.evaluate(() => {
+      const browserWindow = window as typeof window & {
+        __pocketRead?: Promise<string>;
+      };
+      const originalFrame = window.requestAnimationFrame.bind(window);
+      window.requestAnimationFrame = (callback) =>
+        window.setTimeout(() => callback(performance.now()), 180);
+      browserWindow.__pocketRead = (async () => {
+        const tools = await document.modelContext.getTools();
+        const tool = tools.find(
+          (candidate) => candidate.name === "get_current_situation",
+        );
+        if (!tool) throw new Error("Current-situation tool is unavailable.");
+        return document.modelContext.executeTool(tool, {});
+      })().finally(() => {
+        window.requestAnimationFrame = originalFrame;
+      });
+    });
+    await expect(page.getByRole("heading", { name: "Reading current hand" })).toBeVisible();
+    await page.evaluate(() =>
+      (window as typeof window & { __pocketRead: Promise<string> }).__pocketRead,
+    );
+    await expect(page.getByText("Read current hand")).toBeVisible();
+
+    const invalid = await page.evaluate(async () => {
+      const tools = await document.modelContext.getTools();
+      const tool = tools.find((candidate) => candidate.name === "suggest_action");
+      if (!tool) throw new Error("Suggestion tool is unavailable.");
+      return JSON.parse(
+        await document.modelContext.executeTool(tool, {
+          action: "raise",
+          amount: 7,
+        }),
+      ) as { ok: boolean; error?: { code?: string } };
+    });
+    expect(invalid).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_AMOUNT" },
+    });
+    await expect(page.getByRole("heading", { name: "Suggestion rejected" })).toBeVisible();
+
+    const versionBeforeAdvice = await page.locator(".header-game-meta").textContent();
+    const valid = await page.evaluate(async () => {
+      const tools = await document.modelContext.getTools();
+      const tool = tools.find((candidate) => candidate.name === "suggest_action");
+      if (!tool) throw new Error("Suggestion tool is unavailable.");
+      return JSON.parse(
+        await document.modelContext.executeTool(tool, {
+          action: "raise",
+          amount: 64,
+          confidence: 0.72,
+        }),
+      ) as { ok: boolean };
+    });
+    expect(valid.ok).toBe(true);
+    await expect(page.getByRole("heading", { name: "Your copilot suggests" })).toBeVisible();
+    await expect(page.locator(".suggestion-action")).toHaveText("Raise to 64");
+    await expect(page.getByText("Returned recommendation")).toBeVisible();
+    await expect(page.locator(".header-game-meta")).toHaveText(versionBeforeAdvice ?? "");
+  });
+
+  test("keeps the latest actions in the rail and legal mechanics in the dock", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/play?mode=mock");
 
-    const trail = page.locator(".decision-activity-list li");
-    await expect(trail).toHaveCount(3);
-    await expect(trail.nth(0)).toContainText("You called 6");
-    await expect(trail.nth(1)).toContainText("You bet 12");
-    await expect(trail.nth(2)).toContainText("Alex raised to 44");
-    await expect(trail.nth(2)).toContainText("Latest");
-    await expect(trail.nth(2)).toHaveAttribute("aria-current", "true");
+    const trail = page.locator(".hand-feed-item");
+    await expect(trail).toHaveCount(5);
+    await expect(trail.nth(2)).toContainText("You called 6");
+    await expect(trail.nth(3)).toContainText("You bet 12");
+    await expect(trail.nth(4)).toContainText("Alex raised to 44");
+    await expect(trail.nth(4)).toContainText("Latest");
+    await expect(trail.nth(4)).toHaveAttribute("aria-current", "true");
 
-    await expect(page.locator(".decision-guidance")).toHaveText(
-      "It costs 32 chips to continue. Fold, Call 32, or Raise 64–184.",
+    await expect(page.locator(".decision-summary")).toHaveText(
+      "Alex raised to 44·Pot 68·32 to call",
     );
     await expect(
       page.locator('.seat-1 .seat-action-cue > [aria-hidden="true"]'),
@@ -27,25 +143,33 @@ test.describe("in-game activity clarity", () => {
       page.locator('.seat-0 .seat-action-cue > [aria-hidden="true"]'),
     ).toHaveText("In 12");
 
-    const latestHistory = page.locator(".history-item.is-latest");
+    const latestHistory = page.locator(".hand-feed-item.is-latest");
     await expect(latestHistory).toContainText("Latest");
-    await expect(latestHistory).toContainText("Alex");
-    await expect(latestHistory).toContainText("raise to 44");
+    await expect(latestHistory).toContainText("Alex raised to 44");
+    await page.getByRole("button", { name: "Full hand history" }).click();
+    await expect(
+      page.getByRole("dialog", { name: "Full hand history" }),
+    ).toBeVisible();
+    await expect(page.locator(".history-dialog .hand-feed-item")).toHaveCount(5);
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByRole("dialog", { name: "Full hand history" }),
+    ).toHaveCount(0);
     await expect(page.getByText("The table is live.")).toHaveCount(0);
 
     await page.getByRole("button", { name: "Call 32" }).click();
     await expect(page.locator(".decision-notice")).toContainText(
       "You chose call 32",
     );
-    await expect(page.locator(".decision-activity-list li.is-latest")).toContainText(
+    await expect(page.locator(".hand-feed-item.is-latest")).toContainText(
       "You called 32",
     );
-    await expect(page.locator(".decision-activity-list li.is-latest")).toContainText(
+    await expect(page.locator(".hand-feed-item.is-latest")).toContainText(
       "Alex called 32",
       { timeout: 3_000 },
     );
-    await expect(page.locator(".decision-guidance")).toHaveText(
-      "No bet to match. Check for free or Bet 8–148.",
+    await expect(page.locator(".decision-summary")).toContainText(
+      "Check available",
     );
     await expect(page.locator(".seat-action-cue")).toHaveCount(0);
   });
@@ -60,11 +184,15 @@ test.describe("in-game activity clarity", () => {
       await page.setViewportSize(viewport);
       await page.goto("/play?mode=mock");
 
-      await expect(page.locator(".decision-activity-list li.is-latest")).toContainText(
+      await expect(page.locator(".decision-summary")).toContainText(
         "Alex raised to 44",
       );
-      await expect(page.locator(".decision-guidance")).toBeVisible();
       await expect(page.getByRole("button", { name: "Call 32" })).toBeVisible();
+      await expect(page.locator(".companion-rail-toggle")).toBeVisible();
+      await page.locator(".companion-rail-toggle").click();
+      await expect(page.locator(".hand-feed-item.is-latest")).toContainText(
+        "Alex raised to 44",
+      );
 
       const hasHorizontalOverflow = await page.evaluate(
         () => document.documentElement.scrollWidth > window.innerWidth,

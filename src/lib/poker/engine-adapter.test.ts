@@ -122,7 +122,7 @@ describe("HiveTech authoritative adapter", () => {
     expect(decision.legalActions).toEqual([
       { type: "fold" },
       { type: "call", amount: 2 },
-      { type: "raise", min: 4, max: 200 },
+      { type: "raise", minTotal: 4, maxTotal: 200 },
     ]);
     expect(hero.recentActions.slice(0, 2)).toMatchObject([
       { playerId: "bot-east", action: "small-blind", amount: 1 },

@@ -31,7 +31,7 @@ function createSituation(
     legalActions: [
       { type: "fold" },
       { type: "call", amount: 32 },
-      { type: "raise", min: 64, max: 184 },
+      { type: "raise", minTotal: 64, maxTotal: 184 },
     ],
     players: [
       {
@@ -126,15 +126,26 @@ describe("createSuggestActionTool", () => {
       onSuggestion,
     });
 
-    await expect(tool.execute({ action: "all_in" })).rejects.toThrow(
-      "Invalid action",
-    );
-    await expect(
-      tool.execute({ action: "raise", amount: 12 }),
-    ).rejects.toThrow("Minimum raise is 64");
-    await expect(
-      tool.execute({ action: "raise", amount: 80.5 }),
-    ).rejects.toThrow("whole-chip amount");
+    expect(JSON.parse(await tool.execute({ action: "all_in" }))).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_ACTION" },
+    });
+    expect(
+      JSON.parse(await tool.execute({ action: "raise", amount: 12 })),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_AMOUNT" },
+      current: {
+        stateVersion: 4,
+        legalActions: situation.legalActions,
+      },
+    });
+    expect(
+      JSON.parse(await tool.execute({ action: "raise", amount: 80.5 })),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_AMOUNT" },
+    });
     expect(onSuggestion).not.toHaveBeenCalled();
   });
 
@@ -151,7 +162,11 @@ describe("createSuggestActionTool", () => {
       stateVersion: situation.stateVersion + 1,
     };
 
-    await expect(tool.execute({ action: "call" })).rejects.toThrow("stale");
+    expect(JSON.parse(await tool.execute({ action: "call" }))).toMatchObject({
+      ok: false,
+      error: { code: "STALE_STATE" },
+      current: { stateVersion: 5 },
+    });
     expect(onSuggestion).not.toHaveBeenCalled();
   });
 
@@ -167,7 +182,10 @@ describe("createSuggestActionTool", () => {
 
     revisionIsCurrent = false;
 
-    await expect(tool.execute({ action: "call" })).rejects.toThrow("stale");
+    expect(JSON.parse(await tool.execute({ action: "call" }))).toMatchObject({
+      ok: false,
+      error: { code: "STALE_STATE" },
+    });
     expect(onSuggestion).not.toHaveBeenCalled();
   });
 
@@ -185,9 +203,10 @@ describe("createSuggestActionTool", () => {
       currentActorId: "bot-1",
     };
 
-    await expect(tool.execute({ action: "call" })).rejects.toThrow(
-      "not the local player's turn",
-    );
+    expect(JSON.parse(await tool.execute({ action: "call" }))).toMatchObject({
+      ok: false,
+      error: { code: "ILLEGAL_RECOMMENDATION" },
+    });
     expect(onSuggestion).not.toHaveBeenCalled();
   });
 
@@ -207,15 +226,51 @@ describe("createSuggestActionTool", () => {
       legalActions: [],
       gameResult: { outcome: "won", reason: "last-player-standing" },
     });
-    await expect(tool.execute({ action: "check" })).rejects.toThrow("complete");
+    expect(JSON.parse(await tool.execute({ action: "check" }))).toMatchObject({
+      ok: false,
+      error: { code: "GAME_COMPLETE" },
+    });
 
     situation = createSituation({ handNumber: 1, stateVersion: 31 });
-    await expect(tool.execute({ action: "call" })).rejects.toThrow("stale");
+    expect(JSON.parse(await tool.execute({ action: "call" }))).toMatchObject({
+      ok: false,
+      error: { code: "STALE_STATE" },
+    });
     expect(onSuggestion).not.toHaveBeenCalled();
   });
 });
 
 describe("Poker WebMCP definitions", () => {
+  it("reports only real tool execution activity and preserves tool outputs", async () => {
+    const situation = createSituation();
+    const onActivity = vi.fn();
+    const [situationTool] = createReadPokerTools({
+      getSituation: () => situation,
+      getHandHistory: () => situation.recentActions,
+      onActivity,
+    });
+    const suggestionTool = createSuggestActionTool({
+      getSituation: () => situation,
+      onSuggestion: vi.fn(),
+      onActivity,
+    });
+
+    await situationTool.execute({});
+    await suggestionTool.execute({ action: "raise", amount: 12 });
+
+    expect(onActivity.mock.calls.map(([event]) => event)).toEqual([
+      { phase: "started", tool: "get_current_situation" },
+      { phase: "completed", tool: "get_current_situation" },
+      { phase: "started", tool: "suggest_action" },
+      {
+        phase: "rejected",
+        tool: "suggest_action",
+        message:
+          "Minimum total for raise is 64. amount is the final total committed on this street.",
+      },
+    ]);
+  });
+
   it("reads the latest safe situation and history from its getters", async () => {
     let situation: PokerSituation | null = createSituation();
     let history = situation.recentActions;
@@ -311,8 +366,15 @@ describe("Poker WebMCP definitions", () => {
     const actionSchema = suggestionTool.inputSchema.properties?.action as {
       enum: readonly string[];
     };
+    const amountSchema = suggestionTool.inputSchema.properties?.amount as {
+      type: string;
+      minimum: number;
+      description: string;
+    };
     expect(actionSchema.enum).toEqual(RECOMMENDATION_ACTIONS);
     expect(actionSchema.enum).not.toContain("all_in");
+    expect(amountSchema).toMatchObject({ type: "integer", minimum: 1 });
+    expect(amountSchema.description).toContain("raise to X, never raise by X");
   });
 
   it("marks eliminated read output as spectator-safe without restoring advice", async () => {

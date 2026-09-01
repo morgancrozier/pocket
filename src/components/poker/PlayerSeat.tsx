@@ -18,6 +18,7 @@ export function PlayerSeat({
   localCards,
 }: PlayerSeatProps) {
   const visibleCards = localCards?.length ? localCards : player.revealedCards;
+  const isLocal = Boolean(localCards?.length);
   const showVisibleCards = Boolean(visibleCards?.length);
   const showBacks =
     !showVisibleCards &&
@@ -27,7 +28,10 @@ export function PlayerSeat({
 
   return (
     <div
-      className={`player-seat seat-${player.seat} ${player.status === "out" ? "is-out" : ""}`}
+      className={`player-seat seat-${player.seat} status-${player.status} ${
+        player.status === "out" ? "is-out" : ""
+      }`}
+      data-local={isLocal || undefined}
     >
       <div className="seat-cards card-row" aria-hidden={!showVisibleCards}>
         {showVisibleCards ? (
@@ -39,6 +43,16 @@ export function PlayerSeat({
           </>
         ) : null}
       </div>
+
+      {player.committedThisStreet > 0 ? (
+        <span
+          className="seat-commitment"
+          aria-label={`${player.displayName} has ${player.committedThisStreet} chips committed this street`}
+        >
+          <span className="seat-commitment-chip" aria-hidden="true" />
+          {player.committedThisStreet}
+        </span>
+      ) : null}
 
       <div className={`seat-panel ${isCurrent ? "is-current" : ""}`}>
         {isDealer ? <span className="dealer-chip">D</span> : null}

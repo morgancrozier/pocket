@@ -1,10 +1,67 @@
-# Pocket
+# Pocket ♠
 
 > **Every seat has two minds.**
 
-Pocket is a play-money Texas Hold'em experiment for **humans playing with their own personal AI copilots through WebMCP**.
+Pocket is a multiplayer poker experiment exploring what happens when every
+player can bring their own AI agent into a shared web application.
 
-The site supplies the live poker world. The user's external agent reads the exact state that player's seat is allowed to know, combines it with the user's private strategy and context, and places a recommendation into the table UI. The human decides and performs every action.
+Built for the WebMCP Challenge.
+
+**[Live demo](https://pocket-eight-rho.vercel.app) · [How it works](https://pocket-eight-rho.vercel.app/about)**
+
+> Pocket isn't trying to prove that AI can play poker. It's exploring what the
+> web becomes when every user can bring their own AI into a shared application.
+
+## What is Pocket?
+
+Pocket is a play-money Texas Hold'em game designed around a different model of
+AI integration. There is no Pocket chatbot and no Pocket-selected model.
+Instead, the game exposes live, player-safe state and capabilities through
+WebMCP. A compatible personal agent can understand the current hand, reason
+about the decision, and send a recommendation back into the game.
+
+The player remains in control of the final action. Two people at the same table
+can use different agents, models, context, preferences, and reasoning styles
+while Pocket remains the neutral shared environment between them.
+
+## Why WebMCP?
+
+A poker decision depends on live application state, private player state, legal
+actions, recent history, and context that changes from one turn to the next.
+Without a structured interface, a player has to copy cards and stack sizes,
+send screenshots, describe prior betting, and repeat the process whenever the
+hand changes.
+
+WebMCP lets an external agent reason from Pocket's authoritative current game
+rather than from a manually reconstructed description. Pocket provides the
+environment; the user chooses the intelligence.
+
+## Why poker?
+
+Poker combines properties that usually appear separately in agentic software:
+
+- **Live shared state** — the board, pot, stacks, and betting update
+  continuously.
+- **Private state** — each player has information that must never reach another
+  player's agent.
+- **Incomplete information** — useful assistance requires reasoning, not just
+  retrieval.
+- **Independent participants** — every player has different goals and may use a
+  different agent.
+- **Constrained actions** — legal decisions change with the state of the hand.
+- **Human judgment** — advice can help without requiring the agent to take
+  control.
+
+## Humans still play the game
+
+Pocket intentionally separates recommendation from execution. The agent can
+inspect the state its seat is allowed to see and call `suggest_action` to place
+one structured recommendation into the interface. It cannot silently take over
+the player's seat.
+
+The player can follow the recommendation, change it, dismiss it, or make a
+different move. The website owns the game. The player owns the intelligence
+they bring to it.
 
 This repository contains a deliberately narrow **Gate 3 multiplayer room with
 Gate 4 interaction polish**: one or two anonymous human browser
@@ -20,6 +77,8 @@ through the durable demo.
 - A choice-first launcher for bot play, private hosting, or joining by code;
   the homepage creates no session, table state, or WebMCP tools before the
   visitor chooses a mode.
+- A static About page that explains the WebMCP handoff, seat-safe privacy, and
+  human-only execution boundary without initializing Auth or a game.
 - A four-seat, play-money table backed by a server-authoritative Hold'em engine.
 - An eight-character room link with a fixed creator seat, optional guest seat,
   same-session tab recovery, and duplicate display-name support.
@@ -85,9 +144,15 @@ through the durable demo.
 
 ![Pocket's production four-seat quick-tournament table with WebMCP ready, play-money blinds, cards, stacks, and human action controls](docs/submission/screenshots/table.png)
 
+*Your agent can understand the live hand without copying cards, screenshots,
+or game state into a separate chat.*
+
 ### Recommendation before human confirmation
 
 ![An external agent's version-bound poker recommendation with confidence, a Use suggestion action, Dismiss, and the seat-safe advice boundary](docs/submission/screenshots/copilot-recommendation.png)
+
+*WebMCP lets a player's own agent send a structured recommendation back into
+the live game while the human remains in control.*
 
 ### Visible human override receipt
 
@@ -96,6 +161,9 @@ through the durable demo.
 ### Two authenticated seats, one synchronized table
 
 ![Two Pocket browser contexts showing stable distinct human seats and synchronized public table state](docs/submission/screenshots/multiplayer.png)
+
+*Every seat can use a different agent. Pocket provides the shared environment,
+not the shared intelligence.*
 
 ### Terminal result and mobile layout
 
@@ -210,6 +278,11 @@ or Chrome's Model Context Tool Inspector. A successful environment shows
 **WebMCP ready** in the header. Chrome's WebMCP protocol should enumerate only
 `get_current_situation`, `get_hand_history`, and—while it is the human's
 turn—`suggest_action`.
+
+The quickest judge prompt is:
+
+> Analyze the current Pocket hand and recommend my best action. Explain your
+> reasoning briefly and send the recommendation back to the game.
 
 The app sends `Origin-Agent-Cluster: ?1`. Set `WEBMCP_ORIGIN_TRIAL_TOKEN` when your deployed origin requires a token.
 

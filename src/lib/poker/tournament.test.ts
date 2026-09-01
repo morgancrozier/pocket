@@ -38,8 +38,8 @@ function maximumIntent(situation: PokerSituation): PokerActionIntent {
   const sized = situation.legalActions.find(
     (action) => action.type === "raise" || action.type === "bet",
   );
-  if (sized && typeof sized.max === "number") {
-    return { action: sized.type, amount: sized.max };
+  if (sized && typeof sized.maxTotal === "number") {
+    return { action: sized.type, amount: sized.maxTotal };
   }
   return passiveIntentFromLegal(situation.legalActions);
 }

@@ -17,7 +17,7 @@ const display = Newsreader({
 export const metadata: Metadata = {
   title: "Pocket — Every seat has two minds",
   description:
-    "A play-money poker table where your personal copilot advises and you make every move.",
+    "A multiplayer poker experiment where every player can bring their own AI agent into the same live game.",
 };
 
 export default function RootLayout({

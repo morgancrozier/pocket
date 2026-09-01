@@ -3,7 +3,7 @@ import type { LegalAction, PokerActionIntent } from "@/types/poker";
 
 function intentFor(action: LegalAction): PokerActionIntent {
   if (action.type === "bet" || action.type === "raise") {
-    return { action: action.type, amount: action.min };
+    return { action: action.type, amount: action.minTotal };
   }
 
   return { action: action.type };
@@ -11,7 +11,7 @@ function intentFor(action: LegalAction): PokerActionIntent {
 
 function intentForMaximum(action: LegalAction): PokerActionIntent {
   if (action.type === "bet" || action.type === "raise") {
-    return { action: action.type, amount: action.max };
+    return { action: action.type, amount: action.maxTotal };
   }
 
   return { action: action.type };

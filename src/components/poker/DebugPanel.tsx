@@ -38,7 +38,7 @@ export function DebugPanel({
     if (!legal || !situation.isYourTurn) return null;
     return {
       action: legal.type,
-      amount: legal.min ?? legal.amount,
+      amount: legal.minTotal ?? legal.amount,
       confidence: 0.74,
     };
   }

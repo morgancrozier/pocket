@@ -120,14 +120,21 @@ function legalActionLabel(action: LegalAction, toCall: number): string {
     return typeof amount === "number" && amount > 0 ? `Call ${amount}` : "Call";
   }
   if (action.type === "bet" || action.type === "raise") {
-    const label = titleCase(action.type);
-    if (typeof action.min === "number" && typeof action.max === "number") {
-      return action.min === action.max
-        ? `${label} ${action.min}`
-        : `${label} ${action.min}–${action.max}`;
+    const label = action.type === "raise" ? "Raise to" : "Bet total";
+    if (
+      typeof action.minTotal === "number" &&
+      typeof action.maxTotal === "number"
+    ) {
+      return action.minTotal === action.maxTotal
+        ? `${label} ${action.minTotal}`
+        : `${label} ${action.minTotal}–${action.maxTotal}`;
     }
-    if (typeof action.min === "number") return `${label} at least ${action.min}`;
-    if (typeof action.max === "number") return `${label} up to ${action.max}`;
+    if (typeof action.minTotal === "number") {
+      return `${label} at least ${action.minTotal}`;
+    }
+    if (typeof action.maxTotal === "number") {
+      return `${label} up to ${action.maxTotal}`;
+    }
     return label;
   }
   return titleCase(action.type);

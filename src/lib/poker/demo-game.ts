@@ -26,8 +26,10 @@ import type { PokerActionIntent, PokerSituation } from "@/types/poker";
 
 export const DEMO_GAME_ID = "pocket-demo";
 export const DEMO_HERO_ID = "hero";
+export const JUDGE_DEMO_SEED = 39;
 
 const CLAIM_LEASE_MS = 15_000;
+const JUDGE_FLOP_BET_TOTAL = 8;
 
 export const DEMO_PLAYERS: readonly DemoPlayerDefinition[] = [
   {
@@ -104,11 +106,70 @@ export interface DemoGameService {
 
 interface CreateDemoGameOptions {
   deterministicSeed?: number;
+  preparedJudgeDemo?: boolean;
   repository?: DemoGameRepository;
   gameId?: string;
   now?: () => number;
   claimIdFactory?: () => string;
   chooseBotIntent?: (decision: ServerPokerDecision) => PokerActionIntent;
+}
+
+function createPreparedJudgeState(
+  gameId: string,
+  versionOffset = 0,
+): AuthoritativePokerState {
+  let state = createAuthoritativeGame({
+    gameId,
+    players: DEMO_PLAYERS,
+    deterministicSeed: JUDGE_DEMO_SEED,
+    versionOffset,
+  });
+  let flopBetPlaced = false;
+
+  for (let guard = 0; guard < 20; guard += 1) {
+    const decision = getCurrentDecision(state);
+    if (
+      decision.actorId === DEMO_HERO_ID &&
+      decision.street === "flop" &&
+      flopBetPlaced
+    ) {
+      return state;
+    }
+    if (!decision.actorId) {
+      break;
+    }
+
+    let intent: PokerActionIntent | undefined;
+    if (decision.street === "preflop") {
+      const passiveAction =
+        decision.legalActions.find((action) => action.type === "check") ??
+        decision.legalActions.find((action) => action.type === "call");
+      if (passiveAction) intent = { action: passiveAction.type };
+    } else if (decision.street === "flop" && !flopBetPlaced) {
+      const bet = decision.legalActions.find((action) => action.type === "bet");
+      if (
+        bet &&
+        typeof bet.minTotal === "number" &&
+        typeof bet.maxTotal === "number" &&
+        JUDGE_FLOP_BET_TOTAL >= bet.minTotal &&
+        JUDGE_FLOP_BET_TOTAL <= bet.maxTotal
+      ) {
+        intent = { action: "bet", amount: JUDGE_FLOP_BET_TOTAL };
+        flopBetPlaced = true;
+      }
+    } else if (decision.street === "flop") {
+      const fold = decision.legalActions.find((action) => action.type === "fold");
+      if (fold) intent = { action: "fold" };
+    }
+
+    if (!intent) break;
+    state = applyAuthoritativeAction(state, decision.actorId, intent);
+  }
+
+  throw new DemoGameError(
+    "INVALID_STATE",
+    "The prepared judge hand did not reach its intended human decision.",
+  );
 }
 
 export function blindLevelForHand(handNumber: number): {
@@ -220,6 +281,9 @@ export function createDemoGame(
   }
 
   function createInitialState(): AuthoritativePokerState {
+    if (options.preparedJudgeDemo) {
+      return createPreparedJudgeState(gameId);
+    }
     return runBotsUntilHeroOrSettlement(
       createAuthoritativeGame({
         gameId,
@@ -390,6 +454,13 @@ export function createDemoGame(
             throw new DemoGameError(
               "GAME_IN_PROGRESS",
               "The current tournament must finish before it can restart.",
+            );
+          }
+
+          if (options.preparedJudgeDemo) {
+            return createPreparedJudgeState(
+              gameId,
+              getAuthoritativeVersion(authoritative),
             );
           }
 

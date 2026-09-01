@@ -9,9 +9,10 @@ import {
   useState,
 } from "react";
 import { AgentSuggestionPanel } from "@/components/poker/AgentSuggestionPanel";
-import { DecisionActivity } from "@/components/poker/DecisionActivity";
-import { PlayerSeat } from "@/components/poker/PlayerSeat";
-import { PlayingCard } from "@/components/poker/PlayingCard";
+import { CompanionRail } from "@/components/poker/CompanionRail";
+import { HandActionFeed } from "@/components/poker/HandActionFeed";
+import { HumanActionDock } from "@/components/poker/HumanActionDock";
+import { PokerTableSurface } from "@/components/poker/PokerTableSurface";
 import {
   createDecisionPresentation,
   describeAction,
@@ -31,7 +32,10 @@ import {
   serializeStoredSuggestion,
 } from "@/lib/poker/suggestion-storage";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { usePokerTools } from "@/lib/webmcp/usePokerTools";
+import {
+  usePokerTools,
+  type WebMCPSupportState,
+} from "@/lib/webmcp/usePokerTools";
 import type {
   AgentSuggestion,
   PlayingRoomSnapshot,
@@ -43,6 +47,9 @@ import type {
 interface MultiplayerRoomProps {
   roomCode: string;
 }
+
+const START_REQUEST_TIMEOUT_MS = 7_000;
+const START_RETRY_DELAY_MS = 450;
 
 class RoomRequestError extends Error {
   readonly code: string | null;
@@ -107,15 +114,8 @@ function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function actionLabel(action: PlayingRoomSnapshot["situation"]["legalActions"][number]) {
-  if (action.type === "call" && typeof action.amount === "number") {
-    return `Call ${action.amount}`;
-  }
-  return titleCase(action.type);
-}
-
 function webMCPLabel(value: string) {
-  if (value === "available") return "WebMCP ready";
+  if (value === "available") return "WebMCP tools ready";
   if (value === "unavailable") return "WebMCP unavailable";
   if (value === "error") return "WebMCP needs attention";
   return "Preparing WebMCP";
@@ -128,10 +128,13 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
   const [message, setMessage] = useState("Connecting to the room…");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [startNeedsRetry, setStartNeedsRetry] = useState(false);
   const [realtimeState, setRealtimeState] = useState<
     "connecting" | "live" | "fallback"
   >("connecting");
   const [suggestion, setSuggestion] = useState<AgentSuggestion | null>(null);
+  const [staleSuggestion, setStaleSuggestion] =
+    useState<AgentSuggestion | null>(null);
   const [receipt, setReceipt] = useState<RecommendationReceipt | null>(null);
   const [suggestionRevision, setSuggestionRevision] = useState(0);
   const [betDraft, setBetDraft] = useState("");
@@ -142,10 +145,17 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const highestObservedRevisionRef = useRef(0);
   const advanceRevisionRef = useRef<number | null>(null);
+  const suggestionRef = useRef<AgentSuggestion | null>(null);
+  suggestionRef.current = suggestion;
 
   const situation = room && room.phase !== "waiting" ? room.situation : null;
 
-  const clearSuggestion = useCallback(() => {
+  const clearSuggestion = useCallback((preserveAsStale = false) => {
+    if (preserveAsStale && suggestionRef.current) {
+      setStaleSuggestion(suggestionRef.current);
+    } else if (!preserveAsStale) {
+      setStaleSuggestion(null);
+    }
     sessionStorage.removeItem(AGENT_SUGGESTION_STORAGE_KEY);
     setSuggestion(null);
   }, []);
@@ -162,7 +172,7 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
         return;
       }
       if (current?.gameId === next.gameId && next.revision > current.revision) {
-        clearSuggestion();
+        clearSuggestion(true);
       }
       highestObservedRevisionRef.current = Math.max(
         highestObservedRevisionRef.current,
@@ -171,6 +181,7 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
       setHighestObservedRevision((current) => Math.max(current, next.revision));
       roomRef.current = next;
       setRoom(next);
+      if (next.phase !== "waiting") setStartNeedsRetry(false);
       setNeedsJoin(false);
       setError(null);
     },
@@ -255,7 +266,7 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
                 setHighestObservedRevision((current) =>
                   Math.max(current, revision),
                 );
-                clearSuggestion();
+                clearSuggestion(true);
                 void refreshRoom();
               }
             },
@@ -339,6 +350,7 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
     (next: AgentSuggestion) => {
       if (!situation || !isSuggestionCurrent(situation, next)) return;
       clearReceipt();
+      setStaleSuggestion(null);
       setSuggestion(next);
       setSuggestionRevision((value) => value + 1);
       setMessage("Your copilot placed a current recommendation at this seat.");
@@ -346,7 +358,7 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
     [clearReceipt, situation],
   );
 
-  const { supportState, registrationError } = usePokerTools({
+  const { supportState, registrationError, activity } = usePokerTools({
     situation,
     handHistory: situation?.recentActions ?? [],
     onSuggestion: handleSuggestion,
@@ -366,9 +378,13 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
   );
 
   useEffect(() => {
-    setBetDraft(typeof sizedAction?.min === "number" ? String(sizedAction.min) : "");
+    setBetDraft(
+      typeof sizedAction?.minTotal === "number"
+        ? String(sizedAction.minTotal)
+        : "",
+    );
     setBetError(null);
-  }, [situation?.stateVersion, sizedAction?.type, sizedAction?.min]);
+  }, [situation?.stateVersion, sizedAction?.type, sizedAction?.minTotal]);
 
   async function joinRoom(event: React.FormEvent) {
     event.preventDefault();
@@ -392,18 +408,70 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
   async function startRoom() {
     if (!room || room.phase !== "waiting") return;
     setSubmitting(true);
+    setStartNeedsRetry(false);
+    setError(null);
     setMessage("Locking the seats and dealing…");
     try {
-      const payload = await requestJson(`/api/rooms/${roomCode}/start`, {
-        method: "POST",
-        body: JSON.stringify({ expectedRevision: room.revision }),
-      });
-      if (!isOperationResult(payload)) throw new Error("Pocket returned an invalid start result.");
-      applyRoom(payload.room);
-      setMessage("The table is live.");
+      let lastError: unknown = null;
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(
+          () => controller.abort(),
+          START_REQUEST_TIMEOUT_MS,
+        );
+
+        try {
+          const current = roomRef.current;
+          if (!current || current.phase !== "waiting") {
+            setMessage("The table is live.");
+            return;
+          }
+          const payload = await requestJson(`/api/rooms/${roomCode}/start`, {
+            method: "POST",
+            signal: controller.signal,
+            body: JSON.stringify({ expectedRevision: current.revision }),
+          });
+          if (!isOperationResult(payload)) {
+            throw new Error("Pocket returned an invalid start result.");
+          }
+          applyRoom(payload.room);
+          setMessage("The table is live.");
+          return;
+        } catch (cause) {
+          lastError = cause;
+          await refreshRoom();
+          if (roomRef.current?.phase !== "waiting") {
+            setMessage("The table is live.");
+            return;
+          }
+
+          const recoverable =
+            (cause instanceof DOMException && cause.name === "AbortError") ||
+            (cause instanceof RoomRequestError &&
+              (cause.status === 409 || cause.code === "ACTION_IN_PROGRESS"));
+          if (attempt === 0 && recoverable) {
+            await new Promise((resolve) =>
+              window.setTimeout(resolve, START_RETRY_DELAY_MS),
+            );
+            continue;
+          }
+          throw cause;
+        } finally {
+          window.clearTimeout(timeout);
+        }
+      }
+
+      throw lastError ?? new Error("The room could not start.");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The room could not start.");
-      await refreshRoom();
+      setStartNeedsRetry(true);
+      setError(
+        cause instanceof DOMException && cause.name === "AbortError"
+          ? "The start response timed out. Pocket refreshed the room; retry safely."
+          : cause instanceof Error
+            ? cause.message
+            : "The room could not start.",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -503,10 +571,14 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
     const amount = Number(betDraft);
     if (
       !Number.isSafeInteger(amount) ||
-      (typeof sizedAction.min === "number" && amount < sizedAction.min) ||
-      (typeof sizedAction.max === "number" && amount > sizedAction.max)
+      (typeof sizedAction.minTotal === "number" &&
+        amount < sizedAction.minTotal) ||
+      (typeof sizedAction.maxTotal === "number" &&
+        amount > sizedAction.maxTotal)
     ) {
-      setBetError(`Use a whole amount from ${sizedAction.min} to ${sizedAction.max}.`);
+      setBetError(
+        `Use a whole-chip final total from ${sizedAction.minTotal} to ${sizedAction.maxTotal}.`,
+      );
       return;
     }
     void commitAction(sizedAction.type, amount);
@@ -642,7 +714,11 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
             </button>
             {room.viewer.isOwner ? (
               <button className="primary-button" disabled={submitting} onClick={() => void startRoom()}>
-                {submitting ? "Dealing…" : "Start table"}
+                {submitting
+                  ? "Dealing…"
+                  : startNeedsRetry
+                    ? "Retry start"
+                    : "Start table"}
               </button>
             ) : (
               <button className="secondary-button" disabled={submitting} onClick={() => void leaveRoom()}>
@@ -684,138 +760,119 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
       isComplete: playing.phase === "complete",
     },
   );
-  const latestHistorySequence = playing.situation.recentActions.at(-1)?.sequence ?? null;
+  const railRecommendationLabel = visibleSuggestion
+    ? titleCase(describeAction(visibleSuggestion.action, visibleSuggestion.amount))
+    : visibleReceipt
+      ? visibleReceipt.outcome === "followed"
+        ? "Recommendation followed"
+        : "Recommendation overridden"
+      : staleSuggestion
+        ? "Recommendation expired"
+        : supportState === "available"
+          ? "Awaiting a recommendation"
+          : supportState === "unavailable"
+            ? "Copilot unavailable"
+            : supportState === "error"
+              ? "Copilot needs attention"
+              : "Preparing copilot";
 
   return (
     <div className="prototype room-prototype">
       <RoomHeader
         roomCode={playing.roomCode}
-        status={`${webMCPLabel(supportState)} · ${realtimeState === "live" ? "Live" : "Recovering"}`}
+        supportState={supportState}
+        realtimeState={realtimeState}
+        situation={playing.situation}
       />
-      <section className="game-shell">
-        <div className="table-stage">
-          <div className="table-stage-header">
-            <div className="hand-context">
-              <span>Hand {playing.situation.handNumber}</span><span>·</span>
-              <span>{titleCase(playing.situation.street)}</span><span>·</span>
-              <span>Blinds {playing.situation.smallBlind}/{playing.situation.bigBlind}</span><span>·</span>
-              <span>Revision {playing.revision}</span>
-            </div>
-            <span className={`turn-status ${playing.situation.isYourTurn ? "is-active" : ""}`}>{turnTitle}</span>
-          </div>
-          <div className="poker-table">
-            <div className="table-center">
-              <span className="pot-label">Pot <strong>{playing.situation.pot}</strong></span>
-              <div className="card-row community-cards">
-                {playing.situation.board.map((card) => <PlayingCard key={card} card={card} />)}
-                {Array.from({ length: Math.max(0, 5 - playing.situation.board.length) }).map((_, index) => (
-                  <span key={index} className="playing-card is-hidden is-empty-slot" aria-hidden="true" />
-                ))}
-              </div>
-            </div>
-            {playing.situation.players.map((player) => (
-              <PlayerSeat
-                key={player.id}
-                player={player}
-                isCurrent={player.id === playing.situation.currentActorId}
-                isDealer={player.seat === playing.situation.dealerSeat}
-                actionCue={decisionPresentation.seatCues[player.id]}
-                localCards={
-                  player.id === playing.situation.yourPlayerId
-                    ? playing.situation.yourCards
-                    : undefined
-                }
-              />
-            ))}
-          </div>
+      <section className="game-layout game-shell">
+        <div className="game-main">
+          <PokerTableSurface
+            situation={playing.situation}
+            presentation={decisionPresentation}
+            turnTitle={turnTitle}
+          />
+          <HumanActionDock
+            situation={playing.situation}
+            turnTitle={turnTitle}
+            isSubmitting={submitting}
+            notice={error ?? (submitting ? message : null)}
+            betDraft={betDraft}
+            betDraftError={betError}
+            betInputId="room-bet-amount"
+            isSpectating={isSpectating}
+            terminalAction={
+              playing.phase === "complete" && playing.viewer.isOwner
+                ? { label: "Play again", onClick: () => void restartRoom() }
+                : null
+            }
+            onBetDraftChange={(value) => {
+              setBetDraft(value);
+              setBetError(null);
+            }}
+            onCommit={(action, amount) => void commitAction(action, amount)}
+            onSubmitSizedAction={submitSizedAction}
+            onMax={(amount) => {
+              setBetDraft(String(amount));
+              setBetError(null);
+            }}
+          />
         </div>
-        <div className="decision-dock">
-          <section className="action-zone" aria-busy={submitting}>
-            <div className="decision-heading">
-              <h2>{turnTitle}</h2>
-              <span className="decision-context">
-                {isSpectating ? "Public view" : playing.situation.toCall > 0 ? `${playing.situation.toCall} to call` : "Check available"}
-              </span>
-            </div>
-            <DecisionActivity
-              presentation={decisionPresentation}
-              notice={error ?? (submitting ? message : null)}
-            />
-            <div className="action-buttons">
-              {playing.situation.legalActions
-                .filter((action) => action.type !== "bet" && action.type !== "raise")
-                .map((action) => (
-                  <button
-                    key={action.type}
-                    className={`action-button action-${action.type}`}
-                    disabled={submitting || !playing.situation.isYourTurn}
-                    onClick={() => void commitAction(action.type, action.amount)}
-                  >
-                    {actionLabel(action)}
-                  </button>
-                ))}
-              {sizedAction ? (
-                <form className="sized-action" onSubmit={(event) => { event.preventDefault(); submitSizedAction(); }}>
-                  <label htmlFor="room-bet-amount">{titleCase(sizedAction.type)} amount <span>Min {sizedAction.min} · Max {sizedAction.max}</span></label>
-                  <div className="sized-action-entry">
-                    <input id="room-bet-amount" inputMode="numeric" value={betDraft} disabled={submitting} onChange={(event) => { setBetDraft(event.target.value); setBetError(null); }} />
-                    <button type="button" className="secondary-button max-button" onClick={() => setBetDraft(String(sizedAction.max))}>Max</button>
-                    <button type="submit" className={`action-button action-${sizedAction.type}`} disabled={submitting}>{titleCase(sizedAction.type)}</button>
-                  </div>
-                  {betError ? <span className="field-error" role="alert">{betError}</span> : null}
-                </form>
-              ) : null}
-              {playing.phase === "complete" && playing.viewer.isOwner ? (
-                <button className="action-button action-restart" disabled={submitting} onClick={() => void restartRoom()}>Play again</button>
-              ) : null}
-            </div>
-          </section>
+
+        <CompanionRail
+          statusLabel={webMCPLabel(supportState)}
+          recommendationLabel={railRecommendationLabel}
+        >
           <AgentSuggestionPanel
-            key={visibleSuggestion ? `suggestion-${suggestionRevision}` : visibleReceipt ? `receipt-${visibleReceipt.sourceStateVersion}` : `empty-${supportState}-${playing.viewer.status}`}
+            key={
+              visibleSuggestion
+                ? `suggestion-${suggestionRevision}`
+                : visibleReceipt
+                  ? `receipt-${visibleReceipt.sourceStateVersion}`
+                  : staleSuggestion
+                    ? `stale-${staleSuggestion.stateVersion}`
+                    : `empty-${supportState}-${playing.viewer.status}`
+            }
             suggestion={visibleSuggestion}
+            staleSuggestion={staleSuggestion}
             receipt={visibleReceipt}
             situation={playing.situation}
             supportState={supportState}
+            activity={activity}
+            registrationError={registrationError}
             isSubmitting={submitting}
             isSpectating={isSpectating}
             onUse={(next) => void commitAction(next.action, next.amount)}
-            onDismiss={() => { clearSuggestion(); setMessage("Suggestion dismissed. Choose any legal action."); }}
+            onDismiss={() => {
+              clearSuggestion();
+              setMessage("Suggestion dismissed. Choose any legal action.");
+            }}
           />
-        </div>
-      </section>
-      <section className="history-card">
-        <div className="card-heading"><h2>Public hand activity</h2><span>{playing.viewer.status === "eliminated" ? "Spectator-safe" : "Seat-safe"}</span></div>
-        {playing.situation.recentActions.length ? (
-          <ol className="history-list">
-            {playing.situation.recentActions.slice(-6).map((event) => (
-              <li
-                className={`history-item ${event.sequence === latestHistorySequence ? "is-latest" : ""}`}
-                key={event.sequence}
-                aria-current={
-                  event.sequence === latestHistorySequence
-                    ? "true"
-                    : undefined
-                }
-              >
-                <span className="history-item-meta">
-                  <span className="history-street">{event.street}</span>
-                  {event.sequence === latestHistorySequence ? (
-                    <span className="history-latest">Latest</span>
-                  ) : null}
-                </span>
-                <strong>{event.playerId === playing.viewer.playerId ? "You" : event.playerName}</strong>
-                <span>{describeAction(event.action, event.amount)}</span>
-              </li>
-            ))}
-          </ol>
-        ) : <p className="history-empty">No public actions yet.</p>}
+          <HandActionFeed
+            situation={playing.situation}
+            receipt={visibleReceipt}
+            privacyLabel={isSpectating ? "Spectator-safe" : "Seat-safe"}
+          />
+        </CompanionRail>
       </section>
       {registrationError ? <p className="debug-detail">WebMCP detail: {registrationError}</p> : null}
     </div>
   );
 }
 
-function RoomHeader({ roomCode, status }: { roomCode: string; status: string }) {
+function RoomHeader({
+  roomCode,
+  status,
+  supportState,
+  realtimeState,
+  situation,
+}: {
+  roomCode: string;
+  status?: string;
+  supportState?: WebMCPSupportState;
+  realtimeState?: "connecting" | "live" | "fallback";
+  situation?: PlayingRoomSnapshot["situation"];
+}) {
+  const supportLabel = status ?? webMCPLabel(supportState ?? "checking");
   return (
     <header className="topbar">
       <div className="brand-block">
@@ -827,8 +884,30 @@ function RoomHeader({ roomCode, status }: { roomCode: string; status: string }) 
         <p className="tagline">Every seat has two minds.</p>
       </div>
       <div className="status-stack">
-        <span className="status-pill" data-state="available"><span className="status-dot" />{status}</span>
-        <span className="trust-line">Room {roomCode} · Play money</span>
+        <span
+          className="status-pill"
+          data-state={supportState ?? "checking"}
+        >
+          <span className="status-dot" />
+          {supportLabel}
+        </span>
+        <span className="header-game-meta">
+          {situation ? (
+            <>
+              <span>Hand {situation.handNumber}</span>
+              <span aria-hidden="true">·</span>
+              <span>Blinds {situation.smallBlind}/{situation.bigBlind}</span>
+              <span aria-hidden="true">·</span>
+            </>
+          ) : null}
+          <span>Room {roomCode}</span>
+          {realtimeState ? (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>{realtimeState === "live" ? "Live" : "Recovering"}</span>
+            </>
+          ) : null}
+        </span>
       </div>
     </header>
   );
