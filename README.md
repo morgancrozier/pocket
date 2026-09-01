@@ -6,8 +6,8 @@ Pocket is a play-money Texas Hold'em experiment for **humans playing with their 
 
 The site supplies the live poker world. The user's external agent reads the exact state that player's seat is allowed to know, combines it with the user's private strategy and context, and places a recommendation into the table UI. The human decides and performs every action.
 
-This private repository now includes a deliberately narrow **Gate 3 multiplayer
-room with Gate 4 interaction polish**: one or two anonymous human browser
+This repository contains a deliberately narrow **Gate 3 multiplayer room with
+Gate 4 interaction polish**: one or two anonymous human browser
 sessions occupy fixed seats, bots fill the room, and each external personal
 agent receives only its browser seat's safe state and local advice surface.
 
@@ -77,9 +77,13 @@ through the durable demo.
 
 ## Screenshots
 
-### Real local-engine table
+### Choice-first launcher
 
-![Pocket's four-seat quick-tournament table with WebMCP ready, play-money blinds, cards, stacks, and human action controls](docs/submission/screenshots/table.png)
+![Pocket's quiet choice-first launcher for bot play, private hosting, or joining by room code](docs/submission/screenshots/launcher.png)
+
+### Production bot table
+
+![Pocket's production four-seat quick-tournament table with WebMCP ready, play-money blinds, cards, stacks, and human action controls](docs/submission/screenshots/table.png)
 
 ### Recommendation before human confirmation
 
@@ -89,11 +93,15 @@ through the durable demo.
 
 ![Pocket confirming that the human overrode the copilot recommendation after the server accepted the chosen poker action](docs/submission/screenshots/recommendation-receipt.png)
 
+### Two authenticated seats, one synchronized table
+
+![Two Pocket browser contexts showing stable distinct human seats and synchronized public table state](docs/submission/screenshots/multiplayer.png)
+
 ### Terminal result and mobile layout
 
 ![A completed Pocket tournament showing the winner, legitimate showdown cards, and the human-only Play again action](docs/submission/screenshots/terminal-result.png)
 
-<img src="docs/submission/screenshots/mobile.png" width="320" alt="Pocket's real local-engine poker table and controls at a 400-pixel mobile viewport without horizontal overflow" />
+<img src="docs/submission/screenshots/mobile.png" width="320" alt="Pocket's production poker table and controls at a 390-pixel mobile viewport without horizontal overflow" />
 
 ## Start here
 
@@ -122,7 +130,7 @@ the secret key bypasses RLS and must stay in trusted server environments.
 
 ```bash
 cp .env.example .env.local
-npm install
+npm ci
 npm run dev
 ```
 
@@ -143,11 +151,12 @@ a server error. Add `debug=1` to the play URL to use the **Development spike
 controls** under the table to inspect the registered tools or inject a
 recommendation.
 
-### Private candidate evidence boundary
+### Release-candidate evidence boundary
 
 The deterministic and browser suites verify the release-candidate contract
-without weakening the production route. The private submission evidence is in
-`docs/PRIVATE_SUBMISSION_PACKAGE.md`.
+without weakening the production route. The retained submission evidence is in
+`docs/PRIVATE_SUBMISSION_PACKAGE.md`. A concise live judging path is in
+`docs/submission/TESTING_INSTRUCTIONS.md`.
 
 An isolated local Supabase runtime also passed anonymous reconnect, real
 multi-hand engine play, multiplayer membership, authenticated Realtime,
@@ -160,15 +169,14 @@ linked managed Supabase project. An explicitly opted-in two-browser run from an
 isolated local production server passed against that managed backend and
 removed its generated room and anonymous users afterward.
 
-This quick-tournament candidate is **not deployed**. The existing Vercel site
-was intentionally left untouched and must not be described as running this
-build. Repository publication, candidate deployment, video upload, and Devpost
-submission remain explicit external gates.
+The release candidate runs at
+[`pocket-eight-rho.vercel.app`](https://pocket-eight-rho.vercel.app). Repository
+publication, video upload, and Devpost submission remain explicit external
+gates until the final evidence packet is approved.
 
-## Future deployment to Vercel
+## Vercel deployment
 
-Only after publication and deployment are explicitly approved, import the
-repository as a Next.js project and keep the detected install, build, and
+The existing Vercel project uses the detected Next.js install, build, and
 output settings. `vercel.json` places server functions in Portland, close to
 the Oregon Supabase project; static assets remain globally delivered.
 
@@ -190,7 +198,8 @@ Then open:
 2. `docs/BUILD_PLAN.md`
 3. `docs/PRODUCT_SPEC.md`
 
-Paste the Codex prompt into Codex from the repository root.
+Use the Codex prompt only when reconstructing the original implementation
+sequence; it is not required to run Pocket.
 
 ## WebMCP testing
 
