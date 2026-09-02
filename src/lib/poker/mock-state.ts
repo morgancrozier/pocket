@@ -21,9 +21,23 @@ export const INITIAL_SITUATION: PokerSituation = {
   pot: 68,
   currentBet: 44,
   toCall: 32,
+  lastFullRaiseSize: 32,
   smallBlind: 1,
   bigBlind: 2,
   dealerSeat: 0,
+  smallBlindSeat: 1,
+  bigBlindSeat: 2,
+  pots: [
+    {
+      index: 0,
+      type: "main",
+      amount: 68,
+      eligiblePlayerIds: ["hero", "alex"],
+      winnerPlayerIds: [],
+      awards: [],
+    },
+  ],
+  unmatchedContribution: null,
   legalActions: [
     { type: "fold" },
     { type: "call", amount: 32 },

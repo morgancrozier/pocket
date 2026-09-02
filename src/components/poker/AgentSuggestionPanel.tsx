@@ -16,8 +16,8 @@ interface AgentSuggestionPanelProps {
   activity: PokerToolActivityState;
   registrationError?: string | null;
   isSubmitting: boolean;
+  isPlayingTransition?: boolean;
   isSpectating?: boolean;
-  onUse: (suggestion: AgentSuggestion) => void;
   onDismiss: () => void;
 }
 
@@ -25,22 +25,37 @@ function titleCase(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function suggestionActionLabel(
+  suggestion: AgentSuggestion,
+  situation: PokerSituation,
+): string {
+  const amount =
+    suggestion.action === "call"
+      ? (situation.legalActions.find((action) => action.type === "call")
+          ?.amount ?? situation.toCall)
+      : suggestion.amount;
+  return titleCase(describeAction(suggestion.action, amount));
+}
+
 function toolReceiptLabel(receipt: PokerToolActivityReceipt): string {
-  if (receipt.tool === "get_current_situation") return "Read current hand";
-  if (receipt.tool === "get_hand_history") return "Read hand history";
+  if (receipt.tool === "get_current_situation") return "Read private hand";
+  if (receipt.tool === "get_hand_history") return "Read public history";
   return receipt.status === "completed"
-    ? "Returned recommendation"
+    ? "Recommendation received"
     : "Recommendation rejected";
 }
 
 function supportCopy(
   supportState: WebMCPSupportState,
   registrationError: string | null | undefined,
+  isDecisionOpen: boolean,
 ): { label: string; detail: string } {
   if (supportState === "available") {
     return {
-      label: "WebMCP tools ready",
-      detail: "Ask your browser agent what it would do here.",
+      label: "WebMCP ready",
+      detail: isDecisionOpen
+        ? "Ask your browser agent to read this hand and recommend one legal action."
+        : "Your browser agent can read this seat-safe table now.",
     };
   }
   if (supportState === "unavailable") {
@@ -64,11 +79,11 @@ function supportCopy(
 function AdviceBoundary({ isSpectating = false }: { isSpectating?: boolean }) {
   return (
     <p className="suggestion-boundary">
-      <strong>Your agent recommends. You decide.</strong>
+      <strong>Your agent advises. You play.</strong>
       <span>
         {isSpectating
           ? " Public table only. Poker actions are unavailable."
-          : " Visible only to you. Only you can play the action."}
+          : " Recommendations never execute a poker action."}
       </span>
     </p>
   );
@@ -83,18 +98,25 @@ export function AgentSuggestionPanel({
   activity,
   registrationError,
   isSubmitting,
+  isPlayingTransition = false,
   isSpectating = false,
-  onUse,
   onDismiss,
 }: AgentSuggestionPanelProps) {
-  const copy = supportCopy(supportState, registrationError);
+  const isDecisionOpen =
+    !isSpectating &&
+    situation.isYourTurn &&
+    !situation.handResult &&
+    !situation.gameResult;
+  const canRequestFirstRecommendation =
+    isDecisionOpen && supportState === "available";
+  const copy = supportCopy(supportState, registrationError, isDecisionOpen);
   const activeLabel =
     activity.activeTool === "get_current_situation"
-      ? "Reading current hand"
+      ? "Reading the table…"
       : activity.activeTool === "get_hand_history"
-        ? "Reading hand history"
+        ? "Reading public history…"
         : activity.activeTool === "suggest_action"
-          ? "Receiving recommendation"
+          ? "Checking recommendation…"
           : null;
   const latestActivity = activity.receipts[0];
   const latestFailure =
@@ -103,7 +125,7 @@ export function AgentSuggestionPanel({
   let recommendationContent: React.ReactNode;
 
   if (suggestion) {
-    const action = titleCase(describeAction(suggestion.action, suggestion.amount));
+    const action = suggestionActionLabel(suggestion, situation);
     const confidence =
       typeof suggestion.confidence === "number"
         ? `${Math.round(suggestion.confidence * 100)}% confidence`
@@ -112,7 +134,7 @@ export function AgentSuggestionPanel({
     recommendationContent = (
       <div className="copilot-recommendation is-current">
         <div className="copilot-recommendation-heading">
-          <h3>Your copilot suggests</h3>
+          <h3>Recommendation</h3>
           <span className="suggestion-current">
             <span className="suggestion-current-dot" /> Current
           </span>
@@ -127,14 +149,7 @@ export function AgentSuggestionPanel({
           ) : null}
         </div>
         <div className="suggestion-actions">
-          <button
-            className="secondary-button"
-            type="button"
-            disabled={isSubmitting}
-            onClick={() => onUse(suggestion)}
-          >
-            Use {action}
-          </button>
+          <span>Your agent recommends. You decide.</span>
           <button
             className="copilot-text-button"
             type="button"
@@ -204,8 +219,26 @@ export function AgentSuggestionPanel({
         </span>
       </div>
     );
-  } else {
+  } else if (isPlayingTransition) {
     recommendationContent = (
+      <div className="copilot-recommendation is-awaiting">
+        <span className="copilot-awaiting-mark" aria-hidden="true" />
+        <div>
+          <h3>Watching the table action</h3>
+          <p>Advice opens when the action reaches you.</p>
+        </div>
+      </div>
+    );
+  } else {
+    recommendationContent = canRequestFirstRecommendation ? (
+      <div className="copilot-recommendation is-awaiting">
+        <span className="copilot-awaiting-mark" aria-hidden="true" />
+        <div>
+          <h3>Ready for your agent</h3>
+          <p>Ask it to read this hand and recommend one legal action.</p>
+        </div>
+      </div>
+    ) : (
       <div className="copilot-recommendation is-awaiting">
         <span className="copilot-awaiting-mark" aria-hidden="true" />
         <div>
@@ -225,30 +258,35 @@ export function AgentSuggestionPanel({
       className={`suggestion-panel private-copilot ${
         suggestion ? "has-suggestion" : receipt ? "has-receipt" : ""
       }`}
-      aria-live="polite"
-      aria-atomic="true"
     >
       <div className="private-copilot-heading">
-        <span className="rail-kicker">Private copilot</span>
-        <h2>{activeLabel ?? copy.label}</h2>
-        <p>{activeLabel ? "Your browser agent is using Pocket now." : copy.detail}</p>
+        <h2>Private copilot</h2>
         <span className="copilot-connection" data-state={supportState}>
           <span className="status-dot" />
-          {supportState === "available" ? "Seat-safe connection" : copy.label}
+          {activeLabel ?? copy.label}
         </span>
+        <p>{activeLabel ? "Your browser agent is using Pocket now." : copy.detail}</p>
       </div>
 
-      {recommendationContent}
+      <div aria-live="polite" aria-atomic="true">
+        {recommendationContent}
 
-      {suggestion && latestFailure?.message ? (
-        <div className="copilot-inline-error" role="status">
-          <strong>Latest suggestion was rejected</strong>
-          <span>{latestFailure.message}</span>
-        </div>
-      ) : null}
+        {suggestion && latestFailure?.message ? (
+          <div className="copilot-inline-error" role="status">
+            <strong>Latest suggestion was rejected</strong>
+            <span>{latestFailure.message}</span>
+          </div>
+        ) : null}
+      </div>
 
-      {activity.receipts.length ? (
+      {activeLabel || activity.receipts.length ? (
         <ol className="copilot-activity" aria-label="Recent WebMCP activity">
+          {activeLabel ? (
+            <li data-status="active">
+              <span className="copilot-activity-active" aria-hidden="true" />
+              {activeLabel}
+            </li>
+          ) : null}
           {activity.receipts.map((activityReceipt) => (
             <li key={activityReceipt.id} data-status={activityReceipt.status}>
               <span aria-hidden="true">

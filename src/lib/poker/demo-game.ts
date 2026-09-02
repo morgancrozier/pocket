@@ -22,14 +22,17 @@ import {
   type DemoPlayerDefinition,
   type ServerPokerDecision,
 } from "@/lib/poker/engine-adapter";
-import type { PokerActionIntent, PokerSituation } from "@/types/poker";
+import type {
+  PokerActionIntent,
+  PokerSituation,
+  PokerTransitionResult,
+} from "@/types/poker";
 
 export const DEMO_GAME_ID = "pocket-demo";
 export const DEMO_HERO_ID = "hero";
 export const JUDGE_DEMO_SEED = 39;
 
 const CLAIM_LEASE_MS = 15_000;
-const JUDGE_FLOP_BET_TOTAL = 8;
 
 export const DEMO_PLAYERS: readonly DemoPlayerDefinition[] = [
   {
@@ -88,88 +91,34 @@ export class DemoGameError extends Error {
 
 export interface DemoGameService {
   getSituation(viewerId: string): Promise<PokerSituation>;
+  advanceBots(input: {
+    actorId: string;
+    expectedStateVersion: number;
+  }): Promise<PokerTransitionResult>;
   act(input: {
     actorId: string;
     expectedStateVersion: number;
     intent: PokerActionIntent;
-  }): Promise<PokerSituation>;
+  }): Promise<PokerTransitionResult>;
   startNextHand(input: {
     actorId: string;
     expectedStateVersion: number;
-  }): Promise<PokerSituation>;
+  }): Promise<PokerTransitionResult>;
   restartGame(input: {
     actorId: string;
     expectedStateVersion: number;
-  }): Promise<PokerSituation>;
+  }): Promise<PokerTransitionResult>;
   getChipTotal(): Promise<number>;
 }
 
 interface CreateDemoGameOptions {
   deterministicSeed?: number;
-  preparedJudgeDemo?: boolean;
+  judgeDemo?: boolean;
   repository?: DemoGameRepository;
   gameId?: string;
   now?: () => number;
   claimIdFactory?: () => string;
   chooseBotIntent?: (decision: ServerPokerDecision) => PokerActionIntent;
-}
-
-function createPreparedJudgeState(
-  gameId: string,
-  versionOffset = 0,
-): AuthoritativePokerState {
-  let state = createAuthoritativeGame({
-    gameId,
-    players: DEMO_PLAYERS,
-    deterministicSeed: JUDGE_DEMO_SEED,
-    versionOffset,
-  });
-  let flopBetPlaced = false;
-
-  for (let guard = 0; guard < 20; guard += 1) {
-    const decision = getCurrentDecision(state);
-    if (
-      decision.actorId === DEMO_HERO_ID &&
-      decision.street === "flop" &&
-      flopBetPlaced
-    ) {
-      return state;
-    }
-    if (!decision.actorId) {
-      break;
-    }
-
-    let intent: PokerActionIntent | undefined;
-    if (decision.street === "preflop") {
-      const passiveAction =
-        decision.legalActions.find((action) => action.type === "check") ??
-        decision.legalActions.find((action) => action.type === "call");
-      if (passiveAction) intent = { action: passiveAction.type };
-    } else if (decision.street === "flop" && !flopBetPlaced) {
-      const bet = decision.legalActions.find((action) => action.type === "bet");
-      if (
-        bet &&
-        typeof bet.minTotal === "number" &&
-        typeof bet.maxTotal === "number" &&
-        JUDGE_FLOP_BET_TOTAL >= bet.minTotal &&
-        JUDGE_FLOP_BET_TOTAL <= bet.maxTotal
-      ) {
-        intent = { action: "bet", amount: JUDGE_FLOP_BET_TOTAL };
-        flopBetPlaced = true;
-      }
-    } else if (decision.street === "flop") {
-      const fold = decision.legalActions.find((action) => action.type === "fold");
-      if (fold) intent = { action: "fold" };
-    }
-
-    if (!intent) break;
-    state = applyAuthoritativeAction(state, decision.actorId, intent);
-  }
-
-  throw new DemoGameError(
-    "INVALID_STATE",
-    "The prepared judge hand did not reach its intended human decision.",
-  );
 }
 
 export function blindLevelForHand(handNumber: number): {
@@ -223,16 +172,23 @@ function mapAdapterError(error: unknown): never {
   throw error;
 }
 
+interface AuthoritativeTransition {
+  state: AuthoritativePokerState;
+  frames: AuthoritativePokerState[];
+}
+
 function runBotsUntilHeroOrSettlement(
   initial: AuthoritativePokerState,
   chooseBotIntent: (decision: ServerPokerDecision) => PokerActionIntent,
-): AuthoritativePokerState {
+  initialFrames: AuthoritativePokerState[] = [],
+): AuthoritativeTransition {
   let state = initial;
+  const frames = [...initialFrames];
 
   for (let guard = 0; guard < 100; guard += 1) {
     const decision = getCurrentDecision(state);
     if (!decision.actorId || decision.actorId === DEMO_HERO_ID) {
-      return state;
+      return { state, frames };
     }
 
     const actor = ensureKnownPlayer(decision.actorId);
@@ -248,6 +204,7 @@ function runBotsUntilHeroOrSettlement(
       actor.id,
       chooseBotIntent(decision),
     );
+    frames.push(state);
   }
 
   throw new DemoGameError(
@@ -281,17 +238,16 @@ export function createDemoGame(
   }
 
   function createInitialState(): AuthoritativePokerState {
-    if (options.preparedJudgeDemo) {
-      return createPreparedJudgeState(gameId);
-    }
-    return runBotsUntilHeroOrSettlement(
-      createAuthoritativeGame({
-        gameId,
-        players: DEMO_PLAYERS,
-        deterministicSeed: options.deterministicSeed,
-      }),
-      chooseBotIntent,
-    );
+    const initial = createAuthoritativeGame({
+      gameId,
+      players: DEMO_PLAYERS,
+      deterministicSeed: options.judgeDemo
+        ? JUDGE_DEMO_SEED
+        : options.deterministicSeed,
+    });
+    return options.judgeDemo
+      ? initial
+      : runBotsUntilHeroOrSettlement(initial, chooseBotIntent).state;
   }
 
   async function loadOrCreate(): Promise<StoredDemoGame> {
@@ -324,9 +280,9 @@ export function createDemoGame(
 
   async function mutate(
     expectedStateVersion: number,
-    transition: (state: AuthoritativePokerState) => AuthoritativePokerState,
+    transition: (state: AuthoritativePokerState) => AuthoritativeTransition,
     viewerId: string,
-  ): Promise<PokerSituation> {
+  ): Promise<PokerTransitionResult> {
     await loadOrCreate();
 
     const claimId = claimIdFactory();
@@ -349,12 +305,32 @@ export function createDemoGame(
     try {
       const current = restoreRecord(claimed);
       const next = transition(current);
-      const nextVersion = getAuthoritativeVersion(next);
+      const nextVersion = getAuthoritativeVersion(next.state);
+      let previousVersion = claimed.stateVersion;
+      for (const frame of next.frames) {
+        const frameVersion = getAuthoritativeVersion(frame);
+        if (frameVersion <= previousVersion || frameVersion > nextVersion) {
+          throw new DemoGameError(
+            "INVALID_STATE",
+            "Poker playback frames must follow the authoritative version order.",
+          );
+        }
+        previousVersion = frameVersion;
+      }
+      if (
+        next.frames.length > 0 &&
+        getAuthoritativeVersion(next.frames.at(-1)!) !== nextVersion
+      ) {
+        throw new DemoGameError(
+          "INVALID_STATE",
+          "The final poker playback frame must match the committed state.",
+        );
+      }
       const committed = await repository.commit({
         gameId,
         expectedStateVersion: claimed.stateVersion,
         claimId,
-        serializedState: serializeAuthoritativeGame(next),
+        serializedState: serializeAuthoritativeGame(next.state),
         stateVersion: nextVersion,
       });
 
@@ -364,7 +340,12 @@ export function createDemoGame(
         );
       }
 
-      return projectAuthoritativeGame(next, viewerId);
+      return {
+        situation: projectAuthoritativeGame(next.state, viewerId),
+        frames: next.frames.map((frame) =>
+          projectAuthoritativeGame(frame, viewerId),
+        ),
+      };
     } catch (error) {
       await releaseClaim(claimed.stateVersion, claimId);
       mapAdapterError(error);
@@ -376,6 +357,28 @@ export function createDemoGame(
       ensureKnownPlayer(viewerId);
       const stored = await loadOrCreate();
       return projectAuthoritativeGame(restoreRecord(stored), viewerId);
+    },
+
+    async advanceBots({ actorId, expectedStateVersion }) {
+      ensureKnownPlayer(actorId);
+
+      return mutate(
+        expectedStateVersion,
+        (authoritative) => {
+          const decision = getCurrentDecision(authoritative);
+          if (!decision.actorId || decision.actorId === DEMO_HERO_ID) {
+            throw new DemoGameError(
+              "OUT_OF_TURN",
+              "The table is already waiting for the human player.",
+            );
+          }
+          return runBotsUntilHeroOrSettlement(
+            authoritative,
+            chooseBotIntent,
+          );
+        },
+        actorId,
+      );
     },
 
     async act({ actorId, expectedStateVersion, intent }) {
@@ -397,7 +400,11 @@ export function createDemoGame(
             actorId,
             intent,
           );
-          return runBotsUntilHeroOrSettlement(afterHuman, chooseBotIntent);
+          return runBotsUntilHeroOrSettlement(
+            afterHuman,
+            chooseBotIntent,
+            [afterHuman],
+          );
         },
         actorId,
       );
@@ -437,7 +444,7 @@ export function createDemoGame(
             deterministicSeed: seed,
             ...blindLevelForHand(nextHandNumber),
           });
-          return runBotsUntilHeroOrSettlement(next, chooseBotIntent);
+          return runBotsUntilHeroOrSettlement(next, chooseBotIntent, [next]);
         },
         actorId,
       );
@@ -457,19 +464,18 @@ export function createDemoGame(
             );
           }
 
-          if (options.preparedJudgeDemo) {
-            return createPreparedJudgeState(
-              gameId,
-              getAuthoritativeVersion(authoritative),
-            );
-          }
-
           const restarted = restartAuthoritativeGame(
             authoritative,
             DEMO_PLAYERS,
-            options.deterministicSeed,
+            options.judgeDemo
+              ? JUDGE_DEMO_SEED
+              : options.deterministicSeed,
           );
-          return runBotsUntilHeroOrSettlement(restarted, chooseBotIntent);
+          return runBotsUntilHeroOrSettlement(
+            restarted,
+            chooseBotIntent,
+            [restarted],
+          );
         },
         actorId,
       );

@@ -132,9 +132,9 @@ export function GameLauncher() {
             <span className="launcher-kicker">Play-money Texas Hold&apos;em</span>
             <h2 id="launcher-title">Bring your own AI to the table.</h2>
             <p>
-              Pocket uses WebMCP to let your agent understand the live game,
-              reason about your decision, and make a recommendation while you
-              stay in control.
+              Pocket gives your browser agent a seat-safe view of the hand. It
+              can return a recommendation, but only you can choose and play the
+              poker action.
             </p>
             <div className="launcher-table-mark" aria-hidden="true">
               <span className="launcher-seat-mark seat-mark-top" />
@@ -160,8 +160,8 @@ export function GameLauncher() {
                 <span className="launcher-choice-copy">
                   <strong>Play with Bots</strong>
                   <small>
-                    Start a four-seat quick tournament. Bots fill the other
-                    seats.
+                    Sit down immediately, ask your agent, and make the first
+                    decision yourself. Bots fill the other seats.
                   </small>
                 </span>
                 <span className="launcher-choice-arrow" aria-hidden="true">

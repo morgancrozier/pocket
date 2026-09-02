@@ -50,6 +50,17 @@ interface MultiplayerRoomProps {
 
 const START_REQUEST_TIMEOUT_MS = 7_000;
 const START_RETRY_DELAY_MS = 450;
+const CONNECTING_MESSAGE = "Connecting to the room…";
+
+function waitingRoomMessage(room: RoomSnapshot): string {
+  const guestSeated = room.seats.some((seat) => !seat.isBot && !seat.isYou);
+  if (room.viewer.isOwner) {
+    return guestSeated
+      ? "Your guest is seated. Start the table when you are ready."
+      : "Share the invite link, then start the table when your guest is seated.";
+  }
+  return "You have the second human seat. The creator can deal when ready.";
+}
 
 class RoomRequestError extends Error {
   readonly code: string | null;
@@ -125,7 +136,7 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
   const [room, setRoom] = useState<RoomSnapshot | null>(null);
   const [needsJoin, setNeedsJoin] = useState(false);
   const [displayName, setDisplayName] = useState("");
-  const [message, setMessage] = useState("Connecting to the room…");
+  const [message, setMessage] = useState(CONNECTING_MESSAGE);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [startNeedsRetry, setStartNeedsRetry] = useState(false);
@@ -291,20 +302,21 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
   }, [clearSuggestion, refreshRoom, room?.gameId]);
 
   useEffect(() => {
-    if (!room) return;
-    const interval = window.setInterval(
-      () => void refreshRoom(),
-      realtimeState === "live" ? 10_000 : 2_000,
-    );
     const recover = () => void refreshRoom();
     const visible = () => {
       if (document.visibilityState === "visible") recover();
     };
+    const interval = room
+      ? window.setInterval(
+          recover,
+          realtimeState === "live" ? 10_000 : 2_000,
+        )
+      : null;
     window.addEventListener("focus", recover);
     window.addEventListener("online", recover);
     document.addEventListener("visibilitychange", visible);
     return () => {
-      window.clearInterval(interval);
+      if (interval !== null) window.clearInterval(interval);
       window.removeEventListener("focus", recover);
       window.removeEventListener("online", recover);
       document.removeEventListener("visibilitychange", visible);
@@ -488,6 +500,16 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
     }
   }
 
+  async function copyInviteLink() {
+    try {
+      await navigator.clipboard.writeText(inviteUrl);
+      setError(null);
+      setMessage("Invite link copied.");
+    } catch {
+      setError("Pocket could not copy the invite link. Select it and copy it manually.");
+    }
+  }
+
   const commitAction = useCallback(
     async (action: PokerActionType, amount?: number) => {
       if (!room || room.phase === "waiting" || !situation?.isYourTurn || submitting) return;
@@ -501,7 +523,7 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
         actionId,
         expectedRevision: room.revision,
         action,
-        amount,
+        ...(action === "bet" || action === "raise" ? { amount } : {}),
       });
       setSubmitting(true);
       setMessage(`Confirming ${describeAction(action, amount)}…`);
@@ -673,7 +695,20 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
           <div className="loading-stage">
             <div className="loading-copy">
               <h2>Finding your seat</h2>
-              <p>{error ?? message}</p>
+              <p role={error ? "alert" : "status"}>{error ?? message}</p>
+              {error ? (
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    setMessage(CONNECTING_MESSAGE);
+                    void refreshRoom();
+                  }}
+                >
+                  Try again
+                </button>
+              ) : null}
             </div>
           </div>
         </section>
@@ -708,7 +743,7 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
             <button
               className="secondary-button"
               type="button"
-              onClick={() => void navigator.clipboard.writeText(inviteUrl)}
+              onClick={() => void copyInviteLink()}
             >
               Copy link
             </button>
@@ -726,7 +761,9 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
               </button>
             )}
           </div>
-          <p className="room-message" aria-live="polite">{error ?? message}</p>
+          <p className="room-message" aria-live="polite">
+            {error ?? (message === CONNECTING_MESSAGE ? waitingRoomMessage(room) : message)}
+          </p>
         </section>
       </div>
     );
@@ -800,6 +837,7 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
             betDraftError={betError}
             betInputId="room-bet-amount"
             isSpectating={isSpectating}
+            recommendation={visibleSuggestion}
             terminalAction={
               playing.phase === "complete" && playing.viewer.isOwner
                 ? { label: "Play again", onClick: () => void restartRoom() }
@@ -811,10 +849,6 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
             }}
             onCommit={(action, amount) => void commitAction(action, amount)}
             onSubmitSizedAction={submitSizedAction}
-            onMax={(amount) => {
-              setBetDraft(String(amount));
-              setBetError(null);
-            }}
           />
         </div>
 
@@ -841,7 +875,6 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
             registrationError={registrationError}
             isSubmitting={submitting}
             isSpectating={isSpectating}
-            onUse={(next) => void commitAction(next.action, next.amount)}
             onDismiss={() => {
               clearSuggestion();
               setMessage("Suggestion dismissed. Choose any legal action.");
@@ -896,7 +929,9 @@ function RoomHeader({
             <>
               <span>Hand {situation.handNumber}</span>
               <span aria-hidden="true">·</span>
-              <span>Blinds {situation.smallBlind}/{situation.bigBlind}</span>
+              <span>
+                Blinds {situation.smallBlind} / {situation.bigBlind}
+              </span>
               <span aria-hidden="true">·</span>
             </>
           ) : null}

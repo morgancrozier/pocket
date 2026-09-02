@@ -16,7 +16,18 @@ export class DemoIdentityError extends Error {
   }
 }
 
-function unavailableIdentity(): DemoIdentityError {
+function unavailableIdentity(cause?: unknown): DemoIdentityError {
+  if (cause !== undefined) {
+    const detail =
+      cause && typeof cause === "object"
+        ? {
+            status: (cause as { status?: unknown }).status,
+            code: (cause as { code?: unknown }).code,
+            message: (cause as { message?: unknown }).message,
+          }
+        : cause;
+    console.error("[pocket] demo identity unavailable", detail);
+  }
   return new DemoIdentityError(
     "DEMO_AUTH_UNAVAILABLE",
     "The secure demo session service is unavailable.",
@@ -92,22 +103,24 @@ export async function getOrCreateDemoUserId(
 
   if (hadAuthCookie) {
     if (isUnavailableAuthError(userResult.error)) {
-      throw unavailableIdentity();
+      throw unavailableIdentity(userResult.error);
     }
     throw expiredIdentity();
   }
 
   if (isUnavailableAuthError(userResult.error)) {
-    throw unavailableIdentity();
+    throw unavailableIdentity(userResult.error);
   }
 
   try {
     const { data, error } = await client.auth.signInAnonymously();
-    if (error || !data.user || !data.session) throw unavailableIdentity();
+    if (error || !data.user || !data.session) {
+      throw unavailableIdentity(error ?? "anonymous sign-in returned no session");
+    }
     return data.user.id;
   } catch (error) {
     if (error instanceof DemoIdentityError) throw error;
-    throw unavailableIdentity();
+    throw unavailableIdentity(error);
   }
 }
 

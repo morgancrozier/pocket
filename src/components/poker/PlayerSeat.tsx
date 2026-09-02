@@ -1,4 +1,5 @@
 import { PlayingCard } from "@/components/poker/PlayingCard";
+import { CommittedChips } from "@/components/poker/CommittedChips";
 import type { SeatActionCue } from "@/lib/poker/decision-presentation";
 import type { Card, PublicPlayerView } from "@/types/poker";
 
@@ -8,6 +9,7 @@ interface PlayerSeatProps {
   isDealer: boolean;
   actionCue?: SeatActionCue;
   localCards?: Card[];
+  isYou?: boolean;
 }
 
 export function PlayerSeat({
@@ -16,6 +18,7 @@ export function PlayerSeat({
   isDealer,
   actionCue,
   localCards,
+  isYou = false,
 }: PlayerSeatProps) {
   const visibleCards = localCards?.length ? localCards : player.revealedCards;
   const isLocal = Boolean(localCards?.length);
@@ -25,6 +28,20 @@ export function PlayerSeat({
     player.status !== "folded" &&
     player.status !== "waiting" &&
     player.status !== "out";
+  const statusCue = isCurrent
+    ? isYou
+      ? "Your turn"
+      : "Acting"
+    : actionCue?.label ??
+      (player.status === "folded"
+        ? "Folded"
+        : player.status === "all-in"
+          ? "All-in"
+          : player.status === "out"
+            ? "Out"
+            : player.status === "waiting"
+              ? "Waiting"
+              : null);
 
   return (
     <div
@@ -32,6 +49,9 @@ export function PlayerSeat({
         player.status === "out" ? "is-out" : ""
       }`}
       data-local={isLocal || undefined}
+      data-current={isCurrent || undefined}
+      role="group"
+      aria-label={`${isYou ? "Your" : `${player.displayName}’s`} seat, ${player.stack} chips${statusCue ? `, ${statusCue.toLowerCase()}` : ""}`}
     >
       <div className="seat-cards card-row" aria-hidden={!showVisibleCards}>
         {showVisibleCards ? (
@@ -45,19 +65,23 @@ export function PlayerSeat({
       </div>
 
       {player.committedThisStreet > 0 ? (
-        <span
-          className="seat-commitment"
-          aria-label={`${player.displayName} has ${player.committedThisStreet} chips committed this street`}
-        >
-          <span className="seat-commitment-chip" aria-hidden="true" />
-          {player.committedThisStreet}
-        </span>
+        <CommittedChips
+          key={player.committedThisStreet}
+          amount={player.committedThisStreet}
+          playerName={player.displayName}
+        />
       ) : null}
 
       <div className={`seat-panel ${isCurrent ? "is-current" : ""}`}>
-        {isDealer ? <span className="dealer-chip">D</span> : null}
+        {isDealer ? (
+          <span className="dealer-chip" aria-label="Dealer button" title="Dealer button">
+            D
+          </span>
+        ) : null}
         <div className="seat-name">
-          <span>{player.displayName}</span>
+          <span dir="auto" title={isYou ? player.displayName : undefined}>
+            {isYou ? "You" : player.displayName}
+          </span>
           {player.hasAgent ? (
             <span className="agent-badge" title="Personal agent can use this seat">
               Copilot
@@ -66,16 +90,20 @@ export function PlayerSeat({
         </div>
         <div className="seat-stack">
           <strong>{player.stack}</strong>
-          <span className="chip-unit">chips</span>
-          <span aria-hidden="true">·</span>
-          <span>{player.status}</span>
         </div>
-        {actionCue ? (
+        {statusCue ? (
           <span
-            className={`seat-action-cue ${actionCue.isLatest ? "is-latest" : ""}`}
+            className={`seat-action-cue ${actionCue?.isLatest ? "is-latest" : ""} ${isCurrent ? "is-turn" : ""}`}
+            aria-live={isCurrent ? "polite" : undefined}
           >
-            <span aria-hidden="true">{actionCue.label}</span>
-            <span className="sr-only">{actionCue.ariaLabel}</span>
+            <span aria-hidden="true">{statusCue}</span>
+            <span className="sr-only">
+              {isCurrent
+                ? isYou
+                  ? "It is your turn"
+                  : `${player.displayName} is acting`
+                : actionCue?.ariaLabel ?? statusCue}
+            </span>
           </span>
         ) : null}
       </div>

@@ -42,11 +42,13 @@ async function settlePersistedHand(
 
   for (let guard = 0; !situation.handResult && guard < 20; guard += 1) {
     service = createDemoGame({ deterministicSeed: seed, repository });
-    situation = await service.act({
-      actorId: DEMO_HERO_ID,
-      expectedStateVersion: situation.stateVersion,
-      intent: passiveIntent(situation),
-    });
+    situation = (
+      await service.act({
+        actorId: DEMO_HERO_ID,
+        expectedStateVersion: situation.stateVersion,
+        intent: passiveIntent(situation),
+      })
+    ).situation;
   }
 
   return situation;
@@ -80,18 +82,34 @@ describe("Gate 2 durable demo boundary", () => {
       intent: passiveIntent(before),
     });
 
+    expect(afterAction.frames.at(-1)).toEqual(afterAction.situation);
+    expect(
+      afterAction.frames.every(
+        (frame, index, frames) =>
+          index === 0 || frame.stateVersion > frames[index - 1]!.stateVersion,
+      ),
+    ).toBe(true);
+    for (const frame of afterAction.frames) {
+      const serializedFrame = JSON.stringify(frame);
+      expect(serializedFrame).not.toContain('"deck"');
+      expect(serializedFrame).not.toContain('"burnCards"');
+      expect(serializedFrame).not.toContain('"holeCards"');
+      expect(serializedFrame).not.toContain('"rank"');
+      expect(serializedFrame).not.toContain('"suit"');
+    }
+
     const recreatedService = createDemoGame({
       deterministicSeed: 999,
       repository,
     });
     const resumed = await recreatedService.getSituation(DEMO_HERO_ID);
 
-    expect(resumed).toEqual(afterAction);
-    expect(resumed.handNumber).toBe(afterAction.handNumber);
-    expect(resumed.yourSeat).toBe(afterAction.yourSeat);
-    expect(resumed.yourCards).toEqual(afterAction.yourCards);
-    expect(resumed.stateVersion).toBe(afterAction.stateVersion);
-    expect(resumed.recentActions).toEqual(afterAction.recentActions);
+    expect(resumed).toEqual(afterAction.situation);
+    expect(resumed.handNumber).toBe(afterAction.situation.handNumber);
+    expect(resumed.yourSeat).toBe(afterAction.situation.yourSeat);
+    expect(resumed.yourCards).toEqual(afterAction.situation.yourCards);
+    expect(resumed.stateVersion).toBe(afterAction.situation.stateVersion);
+    expect(resumed.recentActions).toEqual(afterAction.situation.recentActions);
   });
 
   it("accepts exactly one concurrent action and conflicts before the loser runs bots", async () => {
@@ -153,8 +171,10 @@ describe("Gate 2 durable demo boundary", () => {
     expect(repository.committedRevisionCount(DEMO_GAME_ID)).toBe(1);
 
     const accepted = (
-      outcomes[acceptedIndexes[0]!] as PromiseFulfilledResult<PokerSituation>
-    ).value;
+      outcomes[acceptedIndexes[0]!] as PromiseFulfilledResult<
+        Awaited<ReturnType<DemoGameService["act"]>>
+      >
+    ).value.situation;
     const persisted = await createDemoGame({ repository }).getSituation(
       DEMO_HERO_ID,
     );
@@ -186,7 +206,7 @@ describe("Gate 2 durable demo boundary", () => {
       expectedStateVersion: before.stateVersion,
       intent: passiveIntent(before),
     });
-    expect(accepted.stateVersion).toBeGreaterThan(before.stateVersion);
+    expect(accepted.situation.stateVersion).toBeGreaterThan(before.stateVersion);
     expect(repository.committedRevisionCount(DEMO_GAME_ID)).toBe(1);
   });
 
@@ -240,11 +260,12 @@ describe("Gate 2 durable demo boundary", () => {
         DEMO_HERO_ID,
       ),
     ).toBe(true);
+    expect(webmcpSerialized).not.toContain('"deck"');
+    expect(webmcpSerialized).not.toContain('"burnCards"');
+    expect(webmcpSerialized).not.toContain('"holeCards"');
     expect(
-      isSerializedPokerSituationPrivate(
-        webmcpSerialized,
-        authoritative,
-        DEMO_HERO_ID,
+      opponentCards.every(
+        (card) => !webmcpSerialized.includes(JSON.stringify(card)),
       ),
     ).toBe(true);
   });

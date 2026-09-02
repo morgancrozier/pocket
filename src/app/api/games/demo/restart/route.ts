@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
   if (!parsed.success) return invalidRequestResponse();
 
   try {
-    const situation = await getDemoGameStore(
+    const transition = await getDemoGameStore(
       authenticatedUserId,
       parseDemoGameMode(request.nextUrl.searchParams.get("demo")),
       parseJudgeDemoRun(request.nextUrl.searchParams.get("run")),
@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
       expectedStateVersion: parsed.data.expectedStateVersion,
     });
 
-    return NextResponse.json(situation, {
+    return NextResponse.json(transition, {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {

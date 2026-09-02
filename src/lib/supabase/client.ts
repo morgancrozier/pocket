@@ -3,6 +3,18 @@ import { createBrowserClient } from "@supabase/ssr";
 let browserClient: ReturnType<typeof createBrowserClient> | null = null;
 let identityPromise: Promise<string> | null = null;
 
+export type SupabaseIdentityErrorCode = "SESSION_EXPIRED" | "SIGN_IN_FAILED";
+
+export class SupabaseIdentityError extends Error {
+  readonly code: SupabaseIdentityErrorCode;
+
+  constructor(code: SupabaseIdentityErrorCode, message: string) {
+    super(message);
+    this.name = "SupabaseIdentityError";
+    this.code = code;
+  }
+}
+
 export function createSupabaseBrowserClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
@@ -45,14 +57,18 @@ export function ensureSupabaseBrowserIdentity(): Promise<string> {
     const { data: existing, error: existingError } = await client.auth.getUser();
     if (existing.user) return existing.user.id;
     if (hadAuthCookie) {
-      throw new Error(
+      throw new SupabaseIdentityError(
+        "SESSION_EXPIRED",
         existingError?.message ??
           "This Pocket session has expired. Clear it before starting a new seat.",
       );
     }
     const { data, error } = await client.auth.signInAnonymously();
     if (error || !data.user || !data.session) {
-      throw new Error(error?.message ?? "Pocket could not create a secure session.");
+      throw new SupabaseIdentityError(
+        "SIGN_IN_FAILED",
+        error?.message ?? "Pocket could not create a secure session.",
+      );
     }
     return data.user.id;
   })().catch((error) => {
@@ -60,4 +76,18 @@ export function ensureSupabaseBrowserIdentity(): Promise<string> {
     throw error;
   });
   return identityPromise;
+}
+
+/**
+ * Drops the local anonymous session after the server has rejected it as
+ * expired, so the next identity request signs in fresh instead of repeating
+ * the same failure on every reload.
+ */
+export async function resetSupabaseBrowserIdentity(): Promise<void> {
+  identityPromise = null;
+  try {
+    await createSupabaseBrowserClient().auth.signOut({ scope: "local" });
+  } catch {
+    // The stale cookie may already be unusable; the next sign-in decides.
+  }
 }

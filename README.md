@@ -151,7 +151,7 @@ or game state into a separate chat.*
 
 ### Recommendation before human confirmation
 
-![An external agent's version-bound poker recommendation with confidence, a Use suggestion action, Dismiss, and the seat-safe advice boundary](docs/submission/screenshots/copilot-recommendation.png)
+![An external agent's version-bound poker recommendation with confidence, a highlighted matching human action, Dismiss, and the seat-safe advice boundary](docs/submission/screenshots/copilot-recommendation.png)
 
 *WebMCP lets a player's own agent send a structured recommendation back into
 the live game while the human remains in control.*
@@ -239,10 +239,12 @@ linked managed Supabase project. An explicitly opted-in two-browser run from an
 isolated local production server passed against that managed backend and
 removed its generated room and anonymous users afterward.
 
-The release candidate runs at
-[`pocket-eight-rho.vercel.app`](https://pocket-eight-rho.vercel.app). Repository
-publication, video upload, and Devpost submission remain explicit external
-gates until the final evidence packet is approved.
+The current public demo runs at
+[`pocket-eight-rho.vercel.app`](https://pocket-eight-rho.vercel.app). Before
+submission, confirm that this deployment and the public repository point to the
+same audited release commit. Repository publication, video upload, and Devpost
+submission remain explicit external gates until the final evidence packet is
+approved.
 
 ## Vercel deployment
 
@@ -275,9 +277,11 @@ sequence; it is not required to run Pocket.
 
 The app checks for `document.modelContext` at runtime and degrades cleanly when WebMCP is unavailable.
 
-For actual tool testing, use the hackathon-supported Chrome/WebMCP environment
-or Chrome's Model Context Tool Inspector. A successful environment shows
-**WebMCP ready** in the header. Chrome's WebMCP protocol should enumerate only
+For actual tool testing, use ChatGPT's in-app browser, which supports WebMCP out
+of the box. Alternatively, use Google Chrome 149 or later, enable
+`chrome://flags/#enable-webmcp-testing`, restart Chrome, and use the Model
+Context Tool Inspector. A successful environment shows **WebMCP tools ready**
+in the header. Chrome's WebMCP protocol should enumerate only
 `get_current_situation`, `get_hand_history`, and—while it is the human's
 turn—`suggest_action`.
 

@@ -38,9 +38,18 @@ describe("POST /api/games/demo/restart", () => {
 
   it("uses authenticated identity and accepts only the expected version", async () => {
     mocks.restartGame.mockResolvedValue({
-      gameId: "pocket-demo",
-      handNumber: 1,
-      stateVersion: 41,
+      situation: {
+        gameId: "pocket-demo",
+        handNumber: 1,
+        stateVersion: 41,
+      },
+      frames: [
+        {
+          gameId: "pocket-demo",
+          handNumber: 1,
+          stateVersion: 41,
+        },
+      ],
     });
     const response = await POST(request({ expectedStateVersion: 40 }));
 

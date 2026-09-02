@@ -278,9 +278,15 @@ test("real two-browser room remains seat-safe through spectating and restart", a
       (action) => action.type === "bet" || action.type === "raise",
     );
     if (maximum) {
-      await actingPage.getByRole("button", { name: "Max" }).click();
+      await actingPage.getByRole("button", { name: /^All-in:/ }).click();
       await actingPage
-        .getByRole("button", { name: new RegExp(`^${maximum.type}$`, "i") })
+        .getByRole("button", {
+          name: new RegExp(
+            maximum.type === "raise"
+              ? `^Raise to ${maximum.maxTotal}`
+              : `^Bet ${maximum.maxTotal}`,
+          ),
+        })
         .click();
     } else {
       const passive =
@@ -299,9 +305,12 @@ test("real two-browser room remains seat-safe through spectating and restart", a
       .toBeGreaterThan(owner.revision);
     const afterClickedAction = playing(await getRoom(actingPage, roomCode));
     await waitForRevision(observingPage, roomCode, afterClickedAction.revision);
-    await expect(observingPage.locator(".decision-summary")).toContainText(
-      `Pot ${afterClickedAction.situation.pot}`,
-    );
+    await expect(
+      observingPage
+        .locator(".decision-metrics div")
+        .filter({ hasText: "Pot" })
+        .locator("dd"),
+    ).toHaveText(String(afterClickedAction.situation.pot));
     expect(
       afterClickedAction.situation.currentActorId === null ||
         [owner.viewer.playerId, guest.viewer.playerId].includes(
@@ -337,8 +346,8 @@ test("real two-browser room remains seat-safe through spectating and restart", a
       stateVersion: adviceRoom.situation.stateVersion,
       confidence: 0.72,
     });
-    await expect(advicePage.getByText("Your copilot suggests")).toBeVisible();
-    await expect(otherAdvicePage.getByText("Your copilot suggests")).toHaveCount(0);
+    await expect(advicePage.locator(".copilot-recommendation.is-current")).toBeVisible();
+    await expect(otherAdvicePage.locator(".copilot-recommendation.is-current")).toHaveCount(0);
     expect((await getRoom(pageA, roomCode)).revision).toBe(adviceRevision);
     expect((await getRoom(pageB, roomCode)).revision).toBe(adviceRevision);
 
@@ -376,7 +385,7 @@ test("real two-browser room remains seat-safe through spectating and restart", a
         await expect(
           spectator.page
             .getByLabel("Private copilot and current hand")
-            .getByRole("heading", { name: "WebMCP tools ready" }),
+            .getByText("WebMCP ready", { exact: true }),
         ).toBeVisible({ timeout: 15_000 });
         await expect
           .poll(async () => {

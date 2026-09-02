@@ -33,6 +33,7 @@ export function PlayingCard({ card, hidden = false }: PlayingCardProps) {
   }
 
   const rank = card[0];
+  const displayRank = rank === "T" ? "10" : rank;
   const suit = card[1] as keyof typeof SUITS;
   const isRed = suit === "h" || suit === "d";
 
@@ -43,7 +44,7 @@ export function PlayingCard({ card, hidden = false }: PlayingCardProps) {
       role="img"
       aria-label={`${RANK_NAMES[rank] ?? rank} of ${SUIT_NAMES[suit]}`}
     >
-      <span className="card-rank">{rank}</span>
+      <span className="card-rank">{displayRank}</span>
       <span className="card-suit">{SUITS[suit]}</span>
     </span>
   );

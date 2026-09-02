@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createDecisionPresentation,
+  describeDecisionCause,
   describePublicAction,
 } from "@/lib/poker/decision-presentation";
 import type { HandActionEvent, PokerSituation } from "@/types/poker";
@@ -23,9 +24,23 @@ function situation(
     pot: 7,
     currentBet: 4,
     toCall: 4,
+    lastFullRaiseSize: 2,
     smallBlind: 1,
     bigBlind: 2,
     dealerSeat: 0,
+    smallBlindSeat: 1,
+    bigBlindSeat: 2,
+    pots: [
+      {
+        index: 0,
+        type: "main",
+        amount: 7,
+        eligiblePlayerIds: ["hero", "alex", "june", "theo"],
+        winnerPlayerIds: [],
+        awards: [],
+      },
+    ],
+    unmatchedContribution: null,
     legalActions: [
       { type: "fold" },
       { type: "call", amount: 4 },
@@ -113,7 +128,7 @@ function situation(
 }
 
 describe("decision presentation", () => {
-  it("formats public actions with complete viewer-relative grammar", () => {
+  it("formats public actions in present tense with chip-aware amounts", () => {
     const events: HandActionEvent[] = [
       {
         sequence: 1,
@@ -130,19 +145,55 @@ describe("decision presentation", () => {
         action: "bet",
         amount: 5,
       },
+      {
+        sequence: 3,
+        street: "flop",
+        playerId: "june",
+        playerName: "June",
+        action: "call",
+        amount: 1,
+      },
+      {
+        sequence: 4,
+        street: "flop",
+        playerId: "theo",
+        playerName: "Theo",
+        action: "raise",
+        amount: 12,
+      },
+      {
+        sequence: 5,
+        street: "flop",
+        playerId: "alex",
+        playerName: "Alex",
+        action: "fold",
+      },
+      {
+        sequence: 6,
+        street: "flop",
+        playerId: "dealer",
+        playerName: "Dealer",
+        action: "deal",
+      },
     ];
 
-    expect(describePublicAction(events[0], "hero")).toBe("You checked");
-    expect(describePublicAction(events[1], "hero")).toBe("Alex bet 5");
+    expect(events.map((event) => describePublicAction(event, "hero"))).toEqual([
+      "You check",
+      "Alex bets · 5",
+      "June calls · 1",
+      "Theo raises to · 12",
+      "Alex folds",
+      "Dealer deals the cards",
+    ]);
   });
 
   it("shows the latest three public actions in sequence order and excludes deals", () => {
     const presentation = createDecisionPresentation(situation());
 
     expect(presentation.recentActions.map((action) => action.text)).toEqual([
-      "Alex posted the small blind of 1",
-      "June posted the big blind of 2",
-      "Theo raised to 4",
+      "Alex posts the small blind · 1",
+      "June posts the big blind · 2",
+      "Theo raises to · 4",
     ]);
     expect(presentation.latestSequence).toBe(4);
   });
@@ -190,6 +241,33 @@ describe("decision presentation", () => {
     expect(presentation.guidance).toBe("Alex is acting.");
   });
 
+  it("keeps the decision cause focused on the live bet after a later fold", () => {
+    const facingBet = situation({
+      street: "flop",
+      currentBet: 8,
+      toCall: 8,
+      recentActions: [
+        {
+          sequence: 5,
+          street: "flop",
+          playerId: "alex",
+          playerName: "Alex",
+          action: "bet",
+          amount: 8,
+        },
+        {
+          sequence: 6,
+          street: "flop",
+          playerId: "june",
+          playerName: "June",
+          action: "fold",
+        },
+      ],
+    });
+
+    expect(describeDecisionCause(facingBet)).toBe("Facing Alex’s 8-chip bet");
+  });
+
   it("suppresses action guidance for spectators and complete tables", () => {
     expect(
       createDecisionPresentation(situation(), { isSpectating: true }).guidance,
@@ -215,18 +293,18 @@ describe("decision presentation", () => {
     expect(presentation.guidance).toBe("The hand is settled.");
   });
 
-  it("marks the current-street latest actor and other committed players", () => {
+  it("marks every player's latest current-street action", () => {
     const presentation = createDecisionPresentation(situation());
 
     expect(presentation.seatCues).toMatchObject({
-      alex: { label: "In 1", isLatest: false },
-      june: { label: "In 2", isLatest: false },
-      theo: { label: "Raised to 4", isLatest: true },
+      alex: { label: "Small blind 1", isLatest: false },
+      june: { label: "Big blind 2", isLatest: false },
+      theo: { label: "Raise to 4", isLatest: true },
     });
     expect(presentation.seatCues.hero).toBeUndefined();
   });
 
-  it("drops prior-street latest cues after the street advances", () => {
+  it("carries the prior street's latest voluntary action until new action starts", () => {
     const presentation = createDecisionPresentation(
       situation({
         street: "flop",
@@ -243,7 +321,33 @@ describe("decision presentation", () => {
       }),
     );
 
-    expect(presentation.seatCues).toEqual({});
+    expect(presentation.seatCues).toMatchObject({
+      theo: { label: "Raise to 4", isLatest: true },
+    });
+    expect(presentation.seatCues.alex).toBeUndefined();
+    expect(presentation.seatCues.june).toBeUndefined();
+
+    const afterCheck = createDecisionPresentation(
+      situation({
+        street: "flop",
+        currentBet: 0,
+        toCall: 0,
+        recentActions: [
+          ...situation().recentActions,
+          {
+            sequence: 5,
+            street: "flop",
+            playerId: "alex",
+            playerName: "Alex",
+            action: "check",
+          },
+        ],
+      }),
+    );
+    expect(afterCheck.seatCues).toMatchObject({
+      alex: { label: "Check", isLatest: true },
+    });
+    expect(afterCheck.seatCues.theo).toBeUndefined();
   });
 
   it("handles an empty public history", () => {

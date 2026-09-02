@@ -2,28 +2,52 @@ import { describe, expect, it } from "vitest";
 import { createDemoGame, DEMO_HERO_ID } from "./demo-game";
 
 describe("Gate 2 demo game", () => {
-  it("opens the prepared judge path on an engine-backed flop decision", async () => {
-    const game = createDemoGame({ preparedJudgeDemo: true });
-    const situation = await game.getSituation(DEMO_HERO_ID);
+  it("opens the judge path before any voluntary human action", async () => {
+    const game = createDemoGame({ judgeDemo: true });
+    const opening = await game.getSituation(DEMO_HERO_ID);
 
-    expect(situation).toMatchObject({
+    expect(opening).toMatchObject({
       handNumber: 1,
-      stateVersion: 8,
-      street: "flop",
+      stateVersion: 1,
+      street: "preflop",
+      isYourTurn: false,
+      currentActorId: "bot-west",
+      yourCards: ["8h", "Td"],
+      board: [],
+      pot: 3,
+      currentBet: 2,
+      legalActions: [],
+    });
+    expect(
+      opening.recentActions.some(
+        (event) =>
+          event.playerId === DEMO_HERO_ID &&
+          !["small-blind", "big-blind", "deal"].includes(event.action),
+      ),
+    ).toBe(false);
+
+    const transition = await game.advanceBots({
+      actorId: DEMO_HERO_ID,
+      expectedStateVersion: opening.stateVersion,
+    });
+    expect(transition.frames).toHaveLength(1);
+    expect(transition.frames.at(-1)).toEqual(transition.situation);
+    expect(transition.frames.map((frame) => frame.stateVersion)).toEqual([2]);
+    expect(transition.situation).toMatchObject({
+      street: "preflop",
       isYourTurn: true,
       currentActorId: DEMO_HERO_ID,
-      yourCards: ["8h", "Td"],
-      board: ["Jd", "6d", "9s"],
-      pot: 16,
-      currentBet: 8,
-      toCall: 8,
-      legalActions: [
-        { type: "fold" },
-        { type: "call", amount: 8 },
-        { type: "raise", minTotal: 16, maxTotal: 38 },
-      ],
     });
-    expect(JSON.stringify(situation)).not.toContain('"holeCards"');
+    expect(
+      transition.situation.recentActions.some(
+        (event) =>
+          event.playerId === DEMO_HERO_ID &&
+          !["small-blind", "big-blind", "deal"].includes(event.action),
+      ),
+    ).toBe(false);
+    expect(JSON.stringify(transition)).not.toContain('"holeCards"');
+    expect(JSON.stringify(transition)).not.toContain('"deck"');
+    expect(JSON.stringify(transition)).not.toContain('"burnCards"');
   });
 
   it("settles a complete human-and-bot hand with chips conserved", async () => {
@@ -41,11 +65,13 @@ describe("Gate 2 demo game", () => {
         situation.legalActions.find((candidate) => candidate.type === "fold");
 
       expect(action).toBeDefined();
-      situation = await game.act({
+      situation = (
+        await game.act({
         actorId: DEMO_HERO_ID,
         expectedStateVersion: situation.stateVersion,
         intent: { action: action!.type },
-      });
+        })
+      ).situation;
     }
 
     expect(situation.handResult?.reason).toBe("showdown");
@@ -105,11 +131,13 @@ describe("Gate 2 demo game", () => {
     );
 
     expect(raise?.maxTotal).toBeDefined();
-    const settled = await game.act({
+    const settled = (
+      await game.act({
       actorId: DEMO_HERO_ID,
       expectedStateVersion: beforeShove.stateVersion,
       intent: { action: "raise", amount: raise!.maxTotal },
-    });
+      })
+    ).situation;
 
     expect(settled.handResult).not.toBeNull();
     expect(settled.yourStack).toBe(0);

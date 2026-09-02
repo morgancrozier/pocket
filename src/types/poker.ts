@@ -41,6 +41,23 @@ export interface PublicPlayerView {
   revealedCards?: Card[];
 }
 
+export interface PublicPotView {
+  index: number;
+  type: "main" | "side";
+  amount: number;
+  eligiblePlayerIds: string[];
+  winnerPlayerIds: string[];
+  awards: Array<{
+    playerId: string;
+    amount: number;
+  }>;
+}
+
+export interface PublicUnmatchedContribution {
+  playerId: string;
+  amount: number;
+}
+
 export interface HandActionEvent {
   sequence: number;
   street: PokerStreet;
@@ -64,15 +81,27 @@ export interface PokerSituation {
   board: Card[];
   pot: number;
   currentBet: number;
+  /** Chips the hero can actually add to call, capped by the hero's stack. */
   toCall: number;
+  /** Size of the last full bet or raise increment on the current street. */
+  lastFullRaiseSize: number;
   smallBlind: number;
   bigBlind: number;
   dealerSeat: number;
+  smallBlindSeat: number;
+  bigBlindSeat: number;
+  pots: PublicPotView[];
+  unmatchedContribution: PublicUnmatchedContribution | null;
   legalActions: LegalAction[];
   players: PublicPlayerView[];
   recentActions: HandActionEvent[];
   handResult: HandResult | null;
   gameResult: GameResult | null;
+}
+
+export interface PokerTransitionResult {
+  situation: PokerSituation;
+  frames: PokerSituation[];
 }
 
 export interface HandResult {

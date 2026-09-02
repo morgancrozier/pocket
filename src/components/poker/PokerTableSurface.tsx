@@ -14,14 +14,22 @@ export function PokerTableSurface({
   presentation,
   turnTitle,
 }: PokerTableSurfaceProps) {
+  const streetLabel =
+    situation.street.charAt(0).toUpperCase() + situation.street.slice(1);
+
   return (
     <div className="table-stage">
-      <div className="table-turn-banner" data-active={situation.isYourTurn}>
-        <span className="table-turn-dot" />
+      <span className="sr-only" aria-live="polite">
         {turnTitle}
-      </div>
-      <div className="poker-table" aria-label={`Poker table, ${turnTitle}`}>
+      </span>
+      <div
+        className="poker-table"
+        data-street={situation.street}
+        role="group"
+        aria-label={`Poker table, ${turnTitle}`}
+      >
         <div className="table-center">
+          <span className="table-street-label">{streetLabel}</span>
           <div className="card-row community-cards">
             {situation.board.map((card) => (
               <PlayingCard key={card} card={card} />
@@ -36,8 +44,11 @@ export function PokerTableSurface({
               />
             ))}
           </div>
-          <span className="pot-label">
-            Pot <strong>{situation.pot}</strong>
+          <span className="pot-label" aria-label={`Pot ${situation.pot} chips`}>
+            <span aria-hidden="true">Pot</span>
+            <strong key={situation.pot} className="pot-amount" aria-hidden="true">
+              {situation.pot}
+            </strong>
           </span>
         </div>
 
@@ -47,6 +58,7 @@ export function PokerTableSurface({
             player={player}
             isCurrent={player.id === situation.currentActorId}
             isDealer={player.seat === situation.dealerSeat}
+            isYou={player.id === situation.yourPlayerId}
             actionCue={presentation.seatCues[player.id]}
             localCards={
               player.id === situation.yourPlayerId

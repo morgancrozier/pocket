@@ -29,7 +29,9 @@ import type {
   PokerActionType,
   PokerSituation,
   PokerStreet,
+  PublicPotView,
   PublicPlayerView,
+  PublicUnmatchedContribution,
 } from "@/types/poker";
 import { groundPokerSituation } from "@/lib/poker/action-context";
 
@@ -554,6 +556,9 @@ function projectPlayers(
   safeTable: TableView,
 ): PublicPlayerView[] {
   const hand = safeTable.hand;
+  // Once a hand settles, every commitment has been paid into pots and stacks,
+  // so no chips remain "in front" of a seat and nobody is still all-in.
+  const settled = hand?.stage === "complete";
 
   return game.envelope.players.map((definition) => {
     const seat = safeTable.seats[definition.seat];
@@ -561,7 +566,7 @@ function projectPlayers(
       (candidate) => candidate.playerId === definition.id,
     );
     const status: PublicPlayerView["status"] =
-      seat?.stack === 0 && hand?.stage === "complete"
+      seat?.stack === 0 && settled
         ? "out"
         : !participant
           ? seat?.stack === 0
@@ -569,7 +574,7 @@ function projectPlayers(
             : "waiting"
           : participant.folded
             ? "folded"
-            : participant.allIn
+            : participant.allIn && !settled
               ? "all-in"
               : "active";
     const revealedCards =
@@ -586,7 +591,7 @@ function projectPlayers(
       seat: definition.seat,
       stack: seat?.stack ?? 0,
       status,
-      committedThisStreet: participant?.committedStreet ?? 0,
+      committedThisStreet: settled ? 0 : (participant?.committedStreet ?? 0),
       isBot: definition.isBot,
       hasAgent: definition.hasAgent,
       ...(revealedCards ? { revealedCards } : {}),
@@ -634,6 +639,120 @@ function projectHandResult(game: ReconstructedGame): HandResult | null {
       amount,
     })),
   };
+}
+
+function projectPots(hand: TableView["hand"]): PublicPotView[] {
+  if (!hand) return [];
+
+  if (!hand.players.some((player) => player.allIn)) {
+    const awards = new Map<string, number>();
+    for (const pot of hand.pots) {
+      for (const award of pot.awards) {
+        awards.set(
+          award.playerId,
+          (awards.get(award.playerId) ?? 0) + award.amount,
+        );
+      }
+    }
+
+    const amount = hand.pots.reduce((total, pot) => total + pot.amount, 0);
+    return amount === 0
+      ? []
+      : [
+          {
+            index: 0,
+            type: "main",
+            amount,
+            eligiblePlayerIds: [
+              ...new Set(
+                hand.pots.flatMap((pot) => pot.eligiblePlayerIds),
+              ),
+            ],
+            winnerPlayerIds: [
+              ...new Set(hand.pots.flatMap((pot) => pot.winnerPlayerIds)),
+            ],
+            awards: [...awards.entries()].map(([playerId, awardAmount]) => ({
+              playerId,
+              amount: awardAmount,
+            })),
+          },
+        ];
+  }
+
+  const merged: Array<{
+    amount: number;
+    eligiblePlayerIds: string[];
+    winnerPlayerIds: string[];
+    awards: Array<{ playerId: string; amount: number }>;
+  }> = [];
+
+  for (const pot of hand.pots) {
+    const previous = merged.at(-1);
+    const eligibilityKey = [...pot.eligiblePlayerIds].sort().join("\u0000");
+    const winnerKey = [...pot.winnerPlayerIds].sort().join("\u0000");
+    const previousEligibilityKey = previous
+      ? [...previous.eligiblePlayerIds].sort().join("\u0000")
+      : null;
+    const previousWinnerKey = previous
+      ? [...previous.winnerPlayerIds].sort().join("\u0000")
+      : null;
+
+    if (
+      previous &&
+      eligibilityKey === previousEligibilityKey &&
+      winnerKey === previousWinnerKey
+    ) {
+      previous.amount += pot.amount;
+      for (const award of pot.awards) {
+        const existing = previous.awards.find(
+          (candidate) => candidate.playerId === award.playerId,
+        );
+        if (existing) existing.amount += award.amount;
+        else previous.awards.push({ ...award });
+      }
+      continue;
+    }
+
+    merged.push({
+      amount: pot.amount,
+      eligiblePlayerIds: [...pot.eligiblePlayerIds],
+      winnerPlayerIds: [...pot.winnerPlayerIds],
+      awards: pot.awards.map((award) => ({ ...award })),
+    });
+  }
+
+  return merged.map((pot, index) => ({
+    ...pot,
+    index,
+    type: index === 0 ? "main" : "side",
+  }));
+}
+
+function projectUnmatchedContribution(
+  hand: NonNullable<TableView["hand"]>,
+): PublicUnmatchedContribution | null {
+  const totalCommitted = hand.players.reduce(
+    (total, player) => total + player.committedHand,
+    0,
+  );
+  const allocatedToPots = hand.pots.reduce(
+    (total, pot) => total + pot.amount,
+    0,
+  );
+  const amount = totalCommitted - allocatedToPots;
+  if (amount <= 0) return null;
+
+  const highestCommitment = Math.max(
+    ...hand.players.map((player) => player.committedHand),
+  );
+  const unmatchedPlayer = hand.players.find(
+    (player) => player.committedHand === highestCommitment,
+  );
+  if (!unmatchedPlayer) {
+    throw invalidState("The unmatched pot contribution has no player.");
+  }
+
+  return { playerId: unmatchedPlayer.playerId, amount };
 }
 
 function containsForbiddenProjectionKey(value: unknown): boolean {
@@ -937,6 +1056,10 @@ export function projectAuthoritativeGame(
     actorId === viewerId
       ? getLegalActions(game.state, viewerId).map(mapLegalAction)
       : [];
+  const amountToCall = Math.min(
+    Math.max(0, hand.currentBet - viewerHand.committedStreet),
+    viewerSeat.stack,
+  );
 
   return {
     gameId: game.envelope.gameId,
@@ -958,10 +1081,15 @@ export function projectAuthoritativeGame(
             0,
           ),
     currentBet: hand.currentBet,
-    toCall: Math.max(0, hand.currentBet - viewerHand.committedStreet),
+    toCall: amountToCall,
+    lastFullRaiseSize: hand.lastFullRaiseSize,
     smallBlind: safeTable.config.smallBlind,
     bigBlind: safeTable.config.bigBlind,
     dealerSeat: hand.buttonSeat,
+    smallBlindSeat: hand.smallBlindSeat,
+    bigBlindSeat: hand.bigBlindSeat,
+    pots: projectPots(hand),
+    unmatchedContribution: projectUnmatchedContribution(hand),
     legalActions,
     players: projectPlayers(game, safeTable),
     recentActions: mapHandHistory(
@@ -1020,9 +1148,14 @@ export function projectAuthoritativeSpectatorGame(
           ),
     currentBet: hand.currentBet,
     toCall: 0,
+    lastFullRaiseSize: hand.lastFullRaiseSize,
     smallBlind: safeTable.config.smallBlind,
     bigBlind: safeTable.config.bigBlind,
     dealerSeat: hand.buttonSeat,
+    smallBlindSeat: hand.smallBlindSeat,
+    bigBlindSeat: hand.bigBlindSeat,
+    pots: projectPots(hand),
+    unmatchedContribution: projectUnmatchedContribution(hand),
     legalActions: [],
     players: projectPlayers(game, safeTable),
     recentActions: mapHandHistory(

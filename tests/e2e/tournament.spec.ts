@@ -70,9 +70,23 @@ const initialSituation = {
   pot: 12,
   currentBet: 4,
   toCall: 4,
+  lastFullRaiseSize: 4,
   smallBlind: 2,
   bigBlind: 4,
   dealerSeat: 3,
+  smallBlindSeat: 0,
+  bigBlindSeat: 1,
+  pots: [
+    {
+      index: 0,
+      type: "main",
+      amount: 12,
+      eligiblePlayerIds: ["hero", "bot-east", "bot-north"],
+      winnerPlayerIds: [],
+      awards: [],
+    },
+  ],
+  unmatchedContribution: null,
   legalActions: [
     { type: "fold" },
     { type: "call", amount: 4 },
@@ -134,6 +148,10 @@ const initialSituation = {
   gameResult: null,
 };
 
+function transitionResult<T>(situation: T, frames: T[] = [situation]) {
+  return { situation, frames };
+}
+
 function terminalSituationFor(action: string, amount?: number) {
   return {
     ...initialSituation,
@@ -146,6 +164,17 @@ function terminalSituationFor(action: string, amount?: number) {
     pot: 80,
     currentBet: 0,
     toCall: 0,
+    pots: [
+      {
+        index: 0,
+        type: "main",
+        amount: 80,
+        eligiblePlayerIds: ["hero", "bot-east", "bot-north"],
+        winnerPlayerIds: ["bot-east"],
+        awards: [{ playerId: "bot-east", amount: 80 }],
+      },
+    ],
+    unmatchedContribution: null,
     legalActions: [],
     players: [
       { ...initialSituation.players[0], stack: 0, status: "out" },
@@ -188,9 +217,23 @@ const restartedSituation = {
   pot: 5,
   currentBet: 2,
   toCall: 2,
+  lastFullRaiseSize: 2,
   smallBlind: 1,
   bigBlind: 2,
   dealerSeat: 0,
+  smallBlindSeat: 1,
+  bigBlindSeat: 2,
+  pots: [
+    {
+      index: 0,
+      type: "main",
+      amount: 5,
+      eligiblePlayerIds: ["hero", "bot-east", "bot-north", "bot-west"],
+      winnerPlayerIds: [],
+      awards: [],
+    },
+  ],
+  unmatchedContribution: null,
   legalActions: [
     { type: "fold" },
     { type: "call", amount: 2 },
@@ -365,7 +408,7 @@ test("an invalid sized WebMCP recommendation returns recovery and a valid retry 
       recovery: expect.stringContaining("get_current_situation"),
     },
   });
-  await expect(page.getByText("Your copilot suggests")).toHaveCount(0);
+  await expect(page.locator(".copilot-recommendation.is-current")).toHaveCount(0);
 
   const recovered = await suggest(page, {
     action: "raise",
@@ -373,7 +416,7 @@ test("an invalid sized WebMCP recommendation returns recovery and a valid retry 
     stateVersion: initialSituation.stateVersion,
   });
   expect(recovered).toMatchObject({ ok: true });
-  await expect(page.getByText("Your copilot suggests")).toBeVisible();
+  await expect(page.locator(".copilot-recommendation.is-current")).toBeVisible();
   await expect(page.locator(".suggestion-action")).toHaveText("Raise to 12");
 });
 
@@ -420,7 +463,7 @@ test("suggestion registration failure degrades status and later success clears i
   await page.route("**/api/games/demo/action", (route) =>
     route.fulfill({
       status: 200,
-      json: { ...initialSituation, stateVersion: 19 },
+      json: transitionResult({ ...initialSituation, stateVersion: 19 }),
     }),
   );
 
@@ -436,6 +479,234 @@ test("suggestion registration failure degrades status and later success clears i
   await expect(page.locator(".status-pill")).not.toContainText(
     "WebMCP needs attention",
   );
+});
+
+test("authoritative bot frames play in order and can be skipped without another mutation", async ({
+  page,
+}) => {
+  let actionRequests = 0;
+  await installWebMCPStub(page);
+  await page.route("**/api/games/demo/state", (route) =>
+    route.fulfill({ status: 200, json: initialSituation }),
+  );
+
+  const afterHuman = {
+    ...initialSituation,
+    stateVersion: 19,
+    isYourTurn: false,
+    currentActorId: "bot-east",
+    legalActions: [],
+    recentActions: [
+      ...initialSituation.recentActions,
+      {
+        sequence: 2,
+        street: "turn",
+        playerId: "hero",
+        playerName: "Morgan",
+        action: "call",
+        amount: 4,
+      },
+    ],
+  };
+  const afterBet = {
+    ...afterHuman,
+    stateVersion: 20,
+    currentActorId: "bot-north",
+    currentBet: 8,
+    pot: 20,
+    recentActions: [
+      ...afterHuman.recentActions,
+      {
+        sequence: 3,
+        street: "turn",
+        playerId: "bot-east",
+        playerName: "Alex",
+        action: "bet",
+        amount: 8,
+      },
+    ],
+  };
+  const ready = {
+    ...afterBet,
+    stateVersion: 21,
+    isYourTurn: true,
+    currentActorId: "hero",
+    toCall: 8,
+    legalActions: [
+      { type: "fold" },
+      { type: "call", amount: 8 },
+      { type: "raise", minTotal: 16, maxTotal: 32 },
+    ],
+    recentActions: [
+      ...afterBet.recentActions,
+      {
+        sequence: 4,
+        street: "turn",
+        playerId: "bot-north",
+        playerName: "June",
+        action: "fold",
+      },
+    ],
+  };
+
+  await page.route("**/api/games/demo/action", async (route) => {
+    actionRequests += 1;
+    await route.fulfill({
+      status: 200,
+      json: transitionResult(ready, [afterHuman, afterBet, ready]),
+    });
+  });
+
+  await page.goto("/play");
+  await page.getByRole("button", { name: "Call 4" }).click();
+
+  await expect(
+    page.getByRole("button", { name: "Skip to your turn" }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Alex is acting" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Fold" })).toHaveCount(0);
+  await expect
+    .poll(async () =>
+      page.evaluate(async () =>
+        (await document.modelContext.getTools()).map((tool) => tool.name),
+      ),
+    )
+    .not.toContain("suggest_action");
+
+  await expect(page.locator(".playback-status")).toHaveText("Alex bets · 8.");
+  await page.getByRole("button", { name: "Skip to your turn" }).click();
+
+  await expect(page.getByRole("heading", { name: "Your turn" })).toBeVisible();
+  await expect(
+    page.locator(
+      '.player-seat.seat-1 .seat-action-cue > [aria-hidden="true"]',
+    ),
+  ).toHaveText("Bet 8");
+  await expect(page.getByRole("button", { name: "Call 8" })).toBeVisible();
+  expect(actionRequests).toBe(1);
+});
+
+test("refresh during playback catches up to the committed state without replaying frames", async ({
+  page,
+}) => {
+  await installWebMCPStub(page);
+  let serverSituation: unknown = initialSituation;
+  await page.route("**/api/games/demo/state", (route) =>
+    route.fulfill({ status: 200, json: serverSituation }),
+  );
+
+  const afterHuman = {
+    ...initialSituation,
+    stateVersion: 19,
+    isYourTurn: false,
+    currentActorId: "bot-east",
+    legalActions: [],
+    recentActions: [
+      ...initialSituation.recentActions,
+      {
+        sequence: 2,
+        street: "turn",
+        playerId: "hero",
+        playerName: "Morgan",
+        action: "call",
+        amount: 4,
+      },
+    ],
+  };
+  const final = {
+    ...afterHuman,
+    stateVersion: 20,
+    isYourTurn: true,
+    currentActorId: "hero",
+    currentBet: 0,
+    toCall: 0,
+    legalActions: [
+      { type: "check" },
+      { type: "bet", minTotal: 4, maxTotal: 32 },
+    ],
+    recentActions: [
+      ...afterHuman.recentActions,
+      {
+        sequence: 3,
+        street: "turn",
+        playerId: "bot-east",
+        playerName: "Alex",
+        action: "check",
+      },
+    ],
+  };
+  await page.route("**/api/games/demo/action", async (route) => {
+    serverSituation = final;
+    await route.fulfill({
+      status: 200,
+      json: transitionResult(final, [afterHuman, final]),
+    });
+  });
+
+  await page.goto("/play");
+  await page.getByRole("button", { name: "Call 4" }).click();
+  await expect(
+    page.getByRole("button", { name: "Skip to your turn" }),
+  ).toBeVisible();
+  await page.reload();
+
+  await expect(page.getByText("Caught up — Alex checks.", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Skip to your turn" }),
+  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Check" })).toBeVisible();
+  await expect(
+    page.locator(".hand-feed-item").filter({ hasText: "Alex checks" }),
+  ).toHaveCount(1);
+});
+
+test("reduced motion renders the final decision immediately with one causal summary", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await installWebMCPStub(page);
+  await page.route("**/api/games/demo/state", (route) =>
+    route.fulfill({ status: 200, json: initialSituation }),
+  );
+  const final = {
+    ...initialSituation,
+    stateVersion: 20,
+    currentBet: 8,
+    toCall: 8,
+    legalActions: [
+      { type: "fold" },
+      { type: "call", amount: 8 },
+      { type: "raise", minTotal: 16, maxTotal: 32 },
+    ],
+    recentActions: [
+      ...initialSituation.recentActions,
+      {
+        sequence: 2,
+        street: "turn",
+        playerId: "bot-east",
+        playerName: "Alex",
+        action: "bet",
+        amount: 8,
+      },
+    ],
+  };
+  await page.route("**/api/games/demo/action", (route) =>
+    route.fulfill({
+      status: 200,
+      json: transitionResult(final),
+    }),
+  );
+
+  await page.goto("/play");
+  await page.getByRole("button", { name: "Call 4" }).click();
+
+  await expect(
+    page.getByText("Caught up — Facing Alex’s 8-chip bet.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Skip to your turn" }),
+  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Call 8" })).toBeVisible();
 });
 
 test("safe tournament UI replaces and follows advice through restart", async ({
@@ -455,41 +726,71 @@ test("safe tournament UI replaces and follows advice through restart", async ({
       amount?: number;
     };
     actionBodies.push(body);
+    const terminal = terminalSituationFor(body.action, body.amount);
     await route.fulfill({
       status: 200,
-      json: terminalSituationFor(body.action, body.amount),
+      json: transitionResult(terminal),
     });
   });
   await page.route("**/api/games/demo/restart", async (route) => {
     restartBodies.push(route.request().postDataJSON());
-    await route.fulfill({ status: 200, json: restartedSituation });
+    await route.fulfill({
+      status: 200,
+      json: transitionResult(restartedSituation),
+    });
   });
 
-  await page.setViewportSize({ width: 960, height: 900 });
+  await page.setViewportSize({ width: 880, height: 900 });
   await page.goto("/play");
   await expect(page.locator("header .status-pill")).toHaveText(
     "WebMCP tools ready",
   );
-  await expect(page.getByText("Blinds 2/4", { exact: false }).first()).toBeVisible();
+  await expect(
+    page.getByText("Blinds 2 / 4", { exact: false }).first(),
+  ).toBeVisible();
   await expect(page.locator(".player-seat")).toHaveCount(4);
   await page
     .getByRole("button", { name: /Awaiting a recommendation.*WebMCP tools ready/ })
     .click();
-  await expect(page.getByText("Your agent recommends. You decide.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Ready for your agent" })).toBeVisible();
   await page.locator(".companion-rail-mobile-header button").click();
 
-  const amount = page.getByLabel("Raise to", { exact: false });
+  const amount = page.getByRole("spinbutton", { name: "Raise to", exact: true });
   await expect(amount).toHaveValue("8");
+  await expect(
+    page.getByRole("button", { name: "Raise to 8", exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "½ pot: 12", exact: true }).click();
+  await expect(amount).toHaveValue("12");
+  await expect(
+    page.getByRole("button", { name: "Raise to 12", exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Pot: 20", exact: true }).click();
+  await expect(amount).toHaveValue("20");
+
+  const slider = page.getByRole("slider", { name: "Raise to slider" });
+  await slider.fill("16");
+  await expect(amount).toHaveValue("16");
+  await expect(
+    page.getByRole("button", { name: "Raise to 16", exact: true }),
+  ).toBeVisible();
+
   await amount.fill("");
   await expect(amount).toHaveValue("");
   await amount.fill("1");
-  await amount.press("Enter");
-  await expect(page.getByText("Minimum total is 8 chips.")).toBeVisible();
-  await expect(amount).toHaveValue("1");
+  await amount.blur();
+  await expect(amount).toHaveValue("8");
   expect(actionBodies).toHaveLength(0);
 
-  await page.getByRole("button", { name: "Max", exact: true }).click();
+  await page.getByRole("button", { name: "All-in: 32", exact: true }).click();
   await expect(amount).toHaveValue("32");
+  await expect(
+    page.getByRole("button", { name: "Raise to 32", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Min: 8", exact: true }).click();
+  await expect(amount).toHaveValue("8");
   expect(actionBodies).toHaveLength(0);
 
   await suggest(page, {
@@ -501,7 +802,7 @@ test("safe tournament UI replaces and follows advice through restart", async ({
   await page
     .getByRole("button", { name: /Raise to 12.*WebMCP tools ready/ })
     .click();
-  await expect(page.getByText("Your copilot suggests")).toBeVisible();
+  await expect(page.locator(".copilot-recommendation.is-current")).toBeVisible();
   await expect(page.locator(".suggestion-action")).toHaveText("Raise to 12");
   await expect(page.getByText("80% confidence")).toBeVisible();
   expect(actionBodies).toHaveLength(0);
@@ -511,20 +812,28 @@ test("safe tournament UI replaces and follows advice through restart", async ({
     stateVersion: initialSituation.stateVersion,
     confidence: 0.64,
   });
-  await expect(page.locator(".suggestion-action")).toHaveText("Call");
+  await expect(page.locator(".suggestion-action")).toHaveText("Call 4");
   await expect(page.getByText("64% confidence")).toBeVisible();
   await expect(page.getByText("Raise to 12", { exact: true })).toHaveCount(0);
   expect(actionBodies).toHaveLength(0);
 
-  await page.getByRole("button", { name: "Use Call" }).click();
+  await page.locator(".companion-rail-mobile-header button").click();
+  await page.getByRole("button", { name: "Call 4", exact: true }).click();
   await expect(page.getByRole("heading", { name: "You’re out" })).toBeVisible();
+  await page
+    .getByRole("button", {
+      name: /Recommendation followed.*WebMCP tools ready/,
+    })
+    .click();
   await expect(
     page.getByRole("heading", { name: "Recommendation followed" }),
   ).toBeVisible();
-  await expect(page.getByText("You confirmed Call.")).toBeVisible();
+  await expect(page.getByText("You confirmed Call 4.")).toBeVisible();
+  await page.getByRole("button", { name: "Full history" }).click();
   await expect(page.locator(".history-recommendation-followed")).toHaveText(
     "followed",
   );
+  await page.getByRole("button", { name: "Close full hand history" }).click();
   await expect(page.getByRole("button", { name: "Play again" })).toBeVisible();
   expect(actionBodies).toEqual([
     { action: "call", expectedStateVersion: 18 },
@@ -542,7 +851,9 @@ test("safe tournament UI replaces and follows advice through restart", async ({
   await page.locator(".companion-rail-mobile-header button").click();
   await page.getByRole("button", { name: "Play again" }).click();
   await expect(page.getByText("Hand 1", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Blinds 1/2", { exact: false }).first()).toBeVisible();
+  await expect(
+    page.getByText("Blinds 1 / 2", { exact: false }).first(),
+  ).toBeVisible();
   await expect(page.getByText("Recommendation followed")).toHaveCount(0);
   await expect(
     page.getByRole("button", {
@@ -590,13 +901,14 @@ test("rejected actions do not create receipts and accepted overrides do", async 
       return;
     }
 
+    const terminal = terminalSituationFor(body.action, body.amount);
     await route.fulfill({
       status: 200,
-      json: terminalSituationFor(body.action, body.amount),
+      json: transitionResult(terminal),
     });
   });
 
-  await page.setViewportSize({ width: 960, height: 900 });
+  await page.setViewportSize({ width: 880, height: 900 });
   await page.goto("/play");
   await expect(page.locator("header .status-pill")).toHaveText(
     "WebMCP tools ready",
@@ -610,12 +922,14 @@ test("rejected actions do not create receipts and accepted overrides do", async 
   await page
     .getByRole("button", { name: /Raise to 12.*WebMCP tools ready/ })
     .click();
-  await expect(page.getByText("Your copilot suggests")).toBeVisible();
+  await expect(page.locator(".copilot-recommendation.is-current")).toBeVisible();
   await page.locator(".companion-rail-mobile-header button").click();
 
-  const amount = page.getByLabel("Raise to", { exact: false });
+  const amount = page.getByRole("spinbutton", { name: "Raise to", exact: true });
   await amount.fill("16");
-  await page.getByRole("button", { name: "Raise", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Raise to 16", exact: true })
+    .click();
 
   await expect(
     page.getByRole("button", { name: /Raise to 12.*WebMCP tools ready/ }),
@@ -624,7 +938,9 @@ test("rejected actions do not create receipts and accepted overrides do", async 
   await expect(page.getByText("You overrode your copilot")).toHaveCount(0);
   expect(actionBodies).toHaveLength(1);
 
-  await page.getByRole("button", { name: "Raise", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Raise to 16", exact: true })
+    .click();
   await page
     .getByRole("button", { name: /Recommendation overridden.*WebMCP tools ready/ })
     .click();
@@ -634,6 +950,7 @@ test("rejected actions do not create receipts and accepted overrides do", async 
   await expect(
     page.getByText("Your copilot suggested Raise to 12; you chose Raise to 16."),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Full history" }).click();
   await expect(page.locator(".history-recommendation-overridden")).toHaveText(
     "overridden",
   );

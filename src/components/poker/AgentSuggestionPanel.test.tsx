@@ -20,7 +20,6 @@ function renderPanel(
       supportState="available"
       activity={idleActivity}
       isSubmitting={false}
-      onUse={vi.fn()}
       onDismiss={vi.fn()}
       {...overrides}
     />,
@@ -28,11 +27,20 @@ function renderPanel(
 }
 
 describe("AgentSuggestionPanel", () => {
+  it("keeps the ready state compact and preserves the human-action boundary", () => {
+    const html = renderPanel();
+
+    expect(html).toContain("Ready for your agent");
+    expect(html).toContain("recommend one legal action");
+    expect(html).toContain("Recommendations never execute a poker action");
+    expect(html).not.toContain("copilot-onboarding-steps");
+  });
+
   it("does not claim readiness when WebMCP is unavailable", () => {
     const html = renderPanel({ supportState: "unavailable" });
 
     expect(html).toContain("WebMCP unavailable");
-    expect(html).not.toContain("Seat-safe connection");
+    expect(html).not.toContain("tools registered");
     expect(html).toContain("Awaiting a recommendation");
   });
 
@@ -73,8 +81,31 @@ describe("AgentSuggestionPanel", () => {
       },
     });
 
-    expect(html).toContain("Your copilot suggests");
+    expect(html).toContain("Recommendation");
+    expect(html).not.toContain("Ready for your agent");
     expect(html).toContain("Latest suggestion was rejected");
     expect(html).toContain("Minimum total for raise is 64.");
+  });
+});
+
+describe("AgentSuggestionPanel registration truthfulness", () => {
+  it("states WebMCP readiness without claiming an agent connection", () => {
+    const openHtml = renderPanel();
+    expect(openHtml).toContain("WebMCP ready");
+    expect(openHtml).toContain("Ask your browser agent to read this hand");
+    expect(openHtml).not.toContain("Seat-safe connection");
+    expect(openHtml).not.toContain("tools registered");
+
+    const waitingHtml = renderPanel({
+      situation: {
+        ...INITIAL_SITUATION,
+        isYourTurn: false,
+        currentActorId: "alex",
+        legalActions: [],
+      },
+    });
+    expect(waitingHtml).toContain("WebMCP ready");
+    expect(waitingHtml).toContain("can read this seat-safe table now");
+    expect(waitingHtml).not.toContain("tools registered");
   });
 });

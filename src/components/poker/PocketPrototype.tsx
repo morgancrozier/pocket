@@ -22,6 +22,11 @@ import {
   describeAction,
 } from "@/lib/poker/decision-presentation";
 import {
+  describeTransitionCatchUp,
+  describeTransitionFrame,
+  transitionFrameDelay,
+} from "@/lib/poker/transition-playback";
+import {
   createRecommendationReceipt,
   isRecommendationReceiptCurrent,
   RECOMMENDATION_RECEIPT_STORAGE_KEY,
@@ -35,7 +40,11 @@ import {
   restoreStoredSuggestion,
   serializeStoredSuggestion,
 } from "@/lib/poker/suggestion-storage";
-import { ensureSupabaseBrowserIdentity } from "@/lib/supabase/client";
+import {
+  ensureSupabaseBrowserIdentity,
+  resetSupabaseBrowserIdentity,
+  SupabaseIdentityError,
+} from "@/lib/supabase/client";
 import {
   usePokerTools,
   type WebMCPSupportState,
@@ -44,9 +53,35 @@ import type {
   AgentSuggestion,
   PokerActionType,
   PokerSituation,
+  PokerTransitionResult,
 } from "@/types/poker";
 
 type DemoMode = "engine" | "loading" | "mock";
+
+const TRANSITION_PLAYBACK_STORAGE_KEY = "pocket:transition-playback";
+
+function readPlaybackMarker(): {
+  gameId: string;
+  finalStateVersion: number;
+} | null {
+  const serialized = sessionStorage.getItem(TRANSITION_PLAYBACK_STORAGE_KEY);
+  if (!serialized) return null;
+  try {
+    const value = JSON.parse(serialized) as {
+      gameId?: unknown;
+      finalStateVersion?: unknown;
+    };
+    return typeof value.gameId === "string" &&
+      Number.isSafeInteger(value.finalStateVersion)
+      ? {
+          gameId: value.gameId,
+          finalStateVersion: Number(value.finalStateVersion),
+        }
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 function titleCase(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
@@ -67,24 +102,30 @@ function supportLabel(
   return isPracticeFallback ? `Practice fallback · ${label}` : label;
 }
 
-function demoApiUrl(path: string): string {
+/**
+ * The judge run id is captured once at mount so every demo request targets the
+ * same authoritative game even if the address bar is later rewritten by the
+ * router; the URL copy exists for refresh and sharing, not as the source.
+ */
+function demoApiUrl(path: string, judgeRun: string | null): string {
   if (typeof window === "undefined") return path;
   const current = new URLSearchParams(window.location.search);
-  if (current.get("demo") === "judge") {
-    const query = new URLSearchParams({ demo: "judge" });
-    const run = current.get("run");
-    if (run) query.set("run", run);
-    return `${path}?${query.toString()}`;
-  }
-  return path;
+  if (judgeRun === null && current.get("demo") !== "judge") return path;
+  const query = new URLSearchParams({ demo: "judge" });
+  const run = judgeRun ?? current.get("run");
+  if (run) query.set("run", run);
+  return `${path}?${query.toString()}`;
 }
 
-function ensureJudgeDemoRun(): void {
+function ensureJudgeDemoRun(): string | null {
   const url = new URL(window.location.href);
-  if (url.searchParams.get("demo") !== "judge") return;
-  if (url.searchParams.get("run")) return;
-  url.searchParams.set("run", crypto.randomUUID());
+  if (url.searchParams.get("demo") !== "judge") return null;
+  const existing = url.searchParams.get("run");
+  if (existing) return existing;
+  const run = crypto.randomUUID();
+  url.searchParams.set("run", run);
   window.history.replaceState(window.history.state, "", url);
+  return run;
 }
 
 function PocketHeader({
@@ -115,7 +156,9 @@ function PocketHeader({
           <span className="header-game-meta">
             <span>Hand {situation.handNumber}</span>
             <span aria-hidden="true">·</span>
-            <span>Blinds {situation.smallBlind}/{situation.bigBlind}</span>
+            <span>
+              Blinds {situation.smallBlind} / {situation.bigBlind}
+            </span>
           </span>
         ) : (
           <span className="trust-line">Your agent advises. You play.</span>
@@ -139,6 +182,34 @@ function isPokerSituation(value: unknown): value is PokerSituation {
   );
 }
 
+function isPokerTransitionResult(value: unknown): value is PokerTransitionResult {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<PokerTransitionResult>;
+  return (
+    isPokerSituation(candidate.situation) &&
+    Array.isArray(candidate.frames) &&
+    candidate.frames.every(isPokerSituation)
+  );
+}
+
+class DemoRequestError extends Error {
+  readonly code: string | null;
+
+  constructor(message: string, code: string | null) {
+    super(message);
+    this.name = "DemoRequestError";
+    this.code = code;
+  }
+}
+
+function practiceFallbackMessage(error: unknown, retried = false): string {
+  const reason =
+    error instanceof Error && error.message ? ` (${error.message})` : "";
+  return retried
+    ? `The authoritative live table is still unavailable${reason}. This remains a practice hand only.`
+    : `The authoritative live table is unavailable${reason}. This is a practice hand only.`;
+}
+
 async function requestSituation(
   url: string,
   init?: RequestInit,
@@ -154,17 +225,20 @@ async function requestSituation(
   const payload: unknown = await response.json();
 
   if (!response.ok) {
-    const message =
+    const error =
       payload &&
       typeof payload === "object" &&
       "error" in payload &&
       payload.error &&
-      typeof payload.error === "object" &&
-      "message" in payload.error &&
-      typeof payload.error.message === "string"
-        ? payload.error.message
-        : "The table could not complete that request.";
-    throw new Error(message);
+      typeof payload.error === "object"
+        ? (payload.error as { code?: unknown; message?: unknown })
+        : null;
+    throw new DemoRequestError(
+      typeof error?.message === "string"
+        ? error.message
+        : "The table could not complete that request.",
+      typeof error?.code === "string" ? error.code : null,
+    );
   }
 
   if (!isPokerSituation(payload)) {
@@ -172,6 +246,48 @@ async function requestSituation(
   }
 
   return payload;
+}
+
+async function requestTransition(
+  url: string,
+  init: RequestInit,
+): Promise<PokerTransitionResult> {
+  const response = await fetch(url, {
+    cache: "no-store",
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...init.headers,
+    },
+  });
+  const payload: unknown = await response.json();
+
+  if (!response.ok) {
+    const error =
+      payload &&
+      typeof payload === "object" &&
+      "error" in payload &&
+      payload.error &&
+      typeof payload.error === "object"
+        ? (payload.error as { code?: unknown; message?: unknown })
+        : null;
+    throw new DemoRequestError(
+      typeof error?.message === "string"
+        ? error.message
+        : "The table could not complete that request.",
+      typeof error?.code === "string" ? error.code : null,
+    );
+  }
+
+  if (!isPokerTransitionResult(payload)) {
+    throw new Error("Pocket could not follow the table action.");
+  }
+
+  return payload;
+}
+
+function chips(amount: number): string {
+  return `${amount} chip${amount === 1 ? "" : "s"}`;
 }
 
 function resultMessage(situation: PokerSituation): string {
@@ -183,23 +299,23 @@ function resultMessage(situation: PokerSituation): string {
   }
   if (!situation.handResult) return "The bots acted. Your turn again.";
   const winners = situation.handResult.winners
-    .map((winner) => `${winner.playerName} won ${winner.amount}`)
+    .map(
+      (winner) =>
+        `${winner.playerId === situation.yourPlayerId ? "You win" : `${winner.playerName} wins`} ${chips(winner.amount)}`,
+    )
     .join(" · ");
-  return winners || "The hand settled.";
+  return winners ? `${winners}.` : "The hand settled.";
 }
 
 function actionPendingMessage(
-  action: PokerActionType,
-  amount: number | undefined,
   receipt: RecommendationReceipt | null,
 ): string {
-  const humanChoice = describeAction(action, amount);
-  if (!receipt) return `You chose ${humanChoice}. The bots are responding…`;
+  if (!receipt) return "Action sent. The table is responding…";
   if (receipt.outcome === "followed") {
-    return `You followed your copilot: ${humanChoice}. The bots are responding…`;
+    return "Copilot recommendation sent. The table is responding…";
   }
 
-  return `You chose ${humanChoice} instead of ${describeAction(receipt.recommendation.action, receipt.recommendation.amount)}. The bots are responding…`;
+  return "Your choice is sent. The table is responding…";
 }
 
 export function PocketPrototype() {
@@ -218,14 +334,28 @@ export function PocketPrototype() {
     "Preparing your first hand…",
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isPlayingTransition, setIsPlayingTransition] = useState(false);
+  const [playbackStatus, setPlaybackStatus] = useState(
+    "Following the table action…",
+  );
   const [betDraft, setBetDraft] = useState("");
   const [betDraftError, setBetDraftError] = useState<string | null>(null);
   const [showDebug, setShowDebug] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextHandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const playbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const playbackResolveRef = useRef<(() => void) | null>(null);
+  const playbackGenerationRef = useRef(0);
+  const playbackFinalRef = useRef<PokerSituation | null>(null);
+  const playbackActiveRef = useRef(false);
+  const displayedSituationRef = useRef<PokerSituation | null>(null);
+  const authoritativeSituationRef = useRef<PokerSituation | null>(null);
+  const botAdvanceVersionRef = useRef<number | null>(null);
   const autoNextHandVersionRef = useRef<number | null>(null);
+  const judgeRunRef = useRef<string | null>(null);
   const suggestionRef = useRef<AgentSuggestion | null>(null);
   suggestionRef.current = suggestion;
+  displayedSituationRef.current = situation;
 
   const clearSuggestion = useCallback((preserveAsStale = false) => {
     if (preserveAsStale && suggestionRef.current) {
@@ -254,39 +384,273 @@ export function PocketPrototype() {
     [],
   );
 
+  const cancelPlayback = useCallback(
+    (options: { renderFinal?: boolean; message?: string } = {}) => {
+      playbackGenerationRef.current += 1;
+      if (playbackTimerRef.current) {
+        clearTimeout(playbackTimerRef.current);
+        playbackTimerRef.current = null;
+      }
+      const resolve = playbackResolveRef.current;
+      playbackResolveRef.current = null;
+      resolve?.();
+
+      const final = playbackFinalRef.current;
+      playbackFinalRef.current = null;
+      playbackActiveRef.current = false;
+      sessionStorage.removeItem(TRANSITION_PLAYBACK_STORAGE_KEY);
+      setIsPlayingTransition(false);
+      setPlaybackStatus("Following the table action…");
+
+      if (options.renderFinal && final) {
+        const previous = displayedSituationRef.current ?? final;
+        displayedSituationRef.current = final;
+        setSituation(final);
+        setTableMessage(
+          options.message ??
+            describeTransitionCatchUp(previous, final),
+        );
+      }
+    },
+    [],
+  );
+
+  const presentTransition = useCallback(
+    async (
+      transition: PokerTransitionResult,
+    ): Promise<"completed" | "reduced" | "cancelled"> => {
+      if (
+        authoritativeSituationRef.current &&
+        authoritativeSituationRef.current.stateVersion >
+          transition.situation.stateVersion
+      ) {
+        return "cancelled";
+      }
+      const starting = displayedSituationRef.current ?? transition.situation;
+      cancelPlayback();
+      authoritativeSituationRef.current = transition.situation;
+
+      const orderedFrames = transition.frames
+        .filter((frame) => frame.stateVersion > starting.stateVersion)
+        .toSorted((left, right) => left.stateVersion - right.stateVersion);
+      if (
+        transition.situation.stateVersion > starting.stateVersion &&
+        orderedFrames.at(-1)?.stateVersion !== transition.situation.stateVersion
+      ) {
+        orderedFrames.push(transition.situation);
+      }
+
+      const prefersReducedMotion = window.matchMedia(
+        "(prefers-reduced-motion: reduce)",
+      ).matches;
+      if (prefersReducedMotion || orderedFrames.length === 0) {
+        displayedSituationRef.current = transition.situation;
+        setSituation(transition.situation);
+        setTableMessage(
+          describeTransitionCatchUp(starting, transition.situation),
+        );
+        return prefersReducedMotion ? "reduced" : "completed";
+      }
+
+      const generation = playbackGenerationRef.current;
+      playbackFinalRef.current = transition.situation;
+      playbackActiveRef.current = true;
+      sessionStorage.setItem(
+        TRANSITION_PLAYBACK_STORAGE_KEY,
+        JSON.stringify({
+          gameId: transition.situation.gameId,
+          finalStateVersion: transition.situation.stateVersion,
+        }),
+      );
+      setIsPlayingTransition(true);
+
+      let previous = starting;
+      for (const [index, frame] of orderedFrames.entries()) {
+        const previousSequence = previous.recentActions.reduce(
+          (latest, event) => Math.max(latest, event.sequence),
+          0,
+        );
+        const newAction = frame.recentActions.find(
+          (event) => event.sequence > previousSequence && event.action !== "deal",
+        );
+        const showImmediately =
+          index === 0 &&
+          (frame.handNumber !== previous.handNumber ||
+            newAction?.playerId === frame.yourPlayerId);
+
+        if (!showImmediately) {
+          await new Promise<void>((resolve) => {
+            playbackResolveRef.current = resolve;
+            playbackTimerRef.current = setTimeout(() => {
+              playbackTimerRef.current = null;
+              playbackResolveRef.current = null;
+              resolve();
+            }, transitionFrameDelay(previous, frame, orderedFrames.length));
+          });
+        }
+
+        if (playbackGenerationRef.current !== generation) return "cancelled";
+        const message = describeTransitionFrame(previous, frame);
+        displayedSituationRef.current = frame;
+        setSituation(frame);
+        setPlaybackStatus(message);
+        setTableMessage(message);
+        previous = frame;
+      }
+
+      if (playbackGenerationRef.current !== generation) return "cancelled";
+      displayedSituationRef.current = transition.situation;
+      setSituation(transition.situation);
+      playbackFinalRef.current = null;
+      playbackActiveRef.current = false;
+      sessionStorage.removeItem(TRANSITION_PLAYBACK_STORAGE_KEY);
+      setIsPlayingTransition(false);
+      setPlaybackStatus("Following the table action…");
+      return "completed";
+    },
+    [cancelPlayback],
+  );
+
+  const skipPlayback = useCallback(() => {
+    const final = playbackFinalRef.current;
+    const current = displayedSituationRef.current;
+    if (!final || !current) return;
+    cancelPlayback({
+      renderFinal: true,
+      message: describeTransitionCatchUp(current, final),
+    });
+  }, [cancelPlayback]);
+
   const handleSuggestion = useCallback(
     (next: AgentSuggestion) => {
-      if (!situation) return;
+      if (!situation || playbackActiveRef.current || isSubmitting) return;
       if (!isSuggestionCurrent(situation, next)) return;
       clearRecommendationReceipt();
       setStaleSuggestion(null);
       setSuggestion(next);
       setSuggestionPresentationRevision((current) => current + 1);
     },
-    [clearRecommendationReceipt, situation],
+    [clearRecommendationReceipt, isSubmitting, situation],
   );
 
   const { supportState, registrationError, activity } = usePokerTools({
     situation,
     handHistory: situation?.recentActions ?? [],
     onSuggestion: handleSuggestion,
+    interactionLocked: isSubmitting || isPlayingTransition,
   });
 
-  const loadEngineSituation = useCallback(async () => {
-    await ensureSupabaseBrowserIdentity();
-    const next = await requestSituation(demoApiUrl("/api/games/demo/state"));
-    setSituation(next);
-    setMode("engine");
-    setIsPracticeFallback(false);
-    setTableMessage(
-      next.gameResult || next.handResult ? resultMessage(next) : null,
-    );
-    return next;
-  }, []);
+  const loadEngineSituation = useCallback(
+    async (options: { keepMessage?: boolean } = {}) => {
+      // Read this before the first await so concurrent Strict Mode loads retain
+      // the same interrupted-playback marker until either response reconciles.
+      const playbackMarker = readPlaybackMarker();
+      try {
+        await ensureSupabaseBrowserIdentity();
+      } catch (error) {
+        // The server decides whether a cookie it issued is still valid.
+        if (
+          !(
+            error instanceof SupabaseIdentityError &&
+            error.code === "SESSION_EXPIRED"
+          )
+        ) {
+          throw error;
+        }
+      }
+
+      const url = demoApiUrl("/api/games/demo/state", judgeRunRef.current);
+      let next: PokerSituation;
+      try {
+        next = await requestSituation(url);
+      } catch (error) {
+        if (
+          !(
+            error instanceof DemoRequestError &&
+            error.code === "DEMO_SESSION_EXPIRED"
+          )
+        ) {
+          throw error;
+        }
+        // The stored anonymous session is dead: start a fresh seat once.
+        await resetSupabaseBrowserIdentity();
+        await ensureSupabaseBrowserIdentity();
+        next = await requestSituation(url);
+      }
+
+      const previous = displayedSituationRef.current;
+      const interruptedPlayback = playbackActiveRef.current;
+      const recoveredPlayback =
+        playbackMarker?.gameId === next.gameId &&
+        next.stateVersion >= playbackMarker.finalStateVersion;
+      cancelPlayback();
+      authoritativeSituationRef.current = next;
+      displayedSituationRef.current = next;
+      setSituation(next);
+      setMode("engine");
+      setIsPracticeFallback(false);
+      if (!options.keepMessage) {
+        setTableMessage(
+          recoveredPlayback || interruptedPlayback
+            ? describeTransitionCatchUp(previous ?? next, next)
+            : next.gameResult || next.handResult
+              ? resultMessage(next)
+              : null,
+        );
+      }
+      return next;
+    },
+    [cancelPlayback],
+  );
+
+  const advanceEngineBots = useCallback(
+    async (starting: PokerSituation) => {
+      if (isSubmitting || playbackActiveRef.current) return;
+      setIsSubmitting(true);
+      const actor = starting.players.find(
+        (player) => player.id === starting.currentActorId,
+      );
+      setTableMessage(
+        actor
+          ? `Cards are dealt. ${actor.displayName} is first to act…`
+          : "Following the opening action…",
+      );
+
+      try {
+        const transition = await requestTransition(
+          demoApiUrl("/api/games/demo/advance", judgeRunRef.current),
+          {
+            method: "POST",
+            body: JSON.stringify({
+              expectedStateVersion: starting.stateVersion,
+            }),
+          },
+        );
+        const playback = await presentTransition(transition);
+        if (playback === "completed" && transition.situation.isYourTurn) {
+          setTableMessage(null);
+        }
+      } catch (error) {
+        setTableMessage(
+          error instanceof Error
+            ? error.message
+            : "Pocket could not follow the opening action.",
+        );
+        try {
+          await loadEngineSituation({ keepMessage: true });
+        } catch {
+          // Keep the newest player-safe frame visible if refresh also fails.
+        }
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [isSubmitting, loadEngineSituation, presentTransition],
+  );
 
   useEffect(() => {
     let active = true;
-    ensureJudgeDemoRun();
+    judgeRunRef.current = ensureJudgeDemoRun();
     const forceMock = isMockFallbackRequested(window.location.search);
     setShowDebug(isDebugPanelRequested(window.location.search));
 
@@ -300,20 +664,41 @@ export function PocketPrototype() {
       };
     }
 
-    void loadEngineSituation().catch(() => {
+    void loadEngineSituation().catch((error: unknown) => {
       if (!active) return;
       setSituation(INITIAL_SITUATION);
       setMode("mock");
       setIsPracticeFallback(true);
-      setTableMessage(
-        "The authoritative live table is unavailable. This is a practice hand only.",
-      );
+      setTableMessage(practiceFallbackMessage(error));
     });
 
     return () => {
       active = false;
     };
   }, [loadEngineSituation]);
+
+  useEffect(() => {
+    if (
+      mode !== "engine" ||
+      !situation ||
+      situation.isYourTurn ||
+      situation.handResult ||
+      situation.gameResult ||
+      isSubmitting ||
+      isPlayingTransition ||
+      botAdvanceVersionRef.current === situation.stateVersion
+    ) {
+      return;
+    }
+
+    const actor = situation.players.find(
+      (player) => player.id === situation.currentActorId,
+    );
+    if (!actor?.isBot) return;
+
+    botAdvanceVersionRef.current = situation.stateVersion;
+    void advanceEngineBots(situation);
+  }, [advanceEngineBots, isPlayingTransition, isSubmitting, mode, situation]);
 
   useEffect(() => {
     if (!situation) return;
@@ -366,6 +751,9 @@ export function PocketPrototype() {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
       if (nextHandTimerRef.current) clearTimeout(nextHandTimerRef.current);
+      playbackGenerationRef.current += 1;
+      if (playbackTimerRef.current) clearTimeout(playbackTimerRef.current);
+      playbackResolveRef.current?.();
     };
   }, []);
 
@@ -418,7 +806,7 @@ export function PocketPrototype() {
       if (timerRef.current) clearTimeout(timerRef.current);
       clearSuggestion();
       acceptRecommendationReceipt(receipt);
-      setTableMessage(actionPendingMessage(action, amount, receipt));
+      setTableMessage(actionPendingMessage(receipt));
 
       setSituation((current) =>
         current
@@ -497,36 +885,39 @@ export function PocketPrototype() {
     ) => {
       if (!situation?.isYourTurn || isSubmitting) return;
       setIsSubmitting(true);
-      setTableMessage(actionPendingMessage(action, amount, receipt));
+      setTableMessage(actionPendingMessage(receipt));
 
       try {
-        const next = await requestSituation(
-          demoApiUrl("/api/games/demo/action"),
+        const transition = await requestTransition(
+          demoApiUrl("/api/games/demo/action", judgeRunRef.current),
           {
-          method: "POST",
-          body: JSON.stringify({
-            action,
-            amount,
-            expectedStateVersion: situation.stateVersion,
-          }),
+            method: "POST",
+            body: JSON.stringify({
+              action,
+              ...(action === "bet" || action === "raise" ? { amount } : {}),
+              expectedStateVersion: situation.stateVersion,
+            }),
           },
         );
         clearSuggestion();
         acceptRecommendationReceipt(receipt);
-        setSituation(next);
-        setTableMessage(
-          next.handResult
-            ? next.gameResult
-              ? resultMessage(next)
-              : `${resultMessage(next)} The next hand starts shortly.`
-            : null,
-        );
+        const playback = await presentTransition(transition);
+        if (playback === "completed") {
+          const next = transition.situation;
+          setTableMessage(
+            next.handResult
+              ? next.gameResult
+                ? resultMessage(next)
+                : `${resultMessage(next)} The next hand starts shortly.`
+              : null,
+          );
+        }
       } catch (error) {
         setTableMessage(
           error instanceof Error ? error.message : "The action was rejected.",
         );
         try {
-          await loadEngineSituation();
+          await loadEngineSituation({ keepMessage: true });
         } catch {
           // Keep the last known safe state visible if a refresh also fails.
         }
@@ -539,6 +930,7 @@ export function PocketPrototype() {
       clearSuggestion,
       isSubmitting,
       loadEngineSituation,
+      presentTransition,
       situation,
     ],
   );
@@ -586,14 +978,14 @@ export function PocketPrototype() {
       typeof sizedAction.minTotal === "number" &&
       amount < sizedAction.minTotal
     ) {
-      setBetDraftError(`Minimum total is ${sizedAction.minTotal} chips.`);
+      setBetDraftError(`Minimum total is ${chips(sizedAction.minTotal)}.`);
       return;
     }
     if (
       typeof sizedAction.maxTotal === "number" &&
       amount > sizedAction.maxTotal
     ) {
-      setBetDraftError(`Maximum total is ${sizedAction.maxTotal} chips.`);
+      setBetDraftError(`Maximum total is ${chips(sizedAction.maxTotal)}.`);
       return;
     }
 
@@ -608,12 +1000,15 @@ export function PocketPrototype() {
     setIsSubmitting(true);
     setTableMessage("Dealing the next hand…");
     try {
-      const next = await requestSituation(demoApiUrl("/api/games/demo/new-hand"), {
-        method: "POST",
-        body: JSON.stringify({ expectedStateVersion: situation.stateVersion }),
-      });
-      setSituation(next);
-      setTableMessage(null);
+      const transition = await requestTransition(
+        demoApiUrl("/api/games/demo/new-hand", judgeRunRef.current),
+        {
+          method: "POST",
+          body: JSON.stringify({ expectedStateVersion: situation.stateVersion }),
+        },
+      );
+      const playback = await presentTransition(transition);
+      if (playback === "completed") setTableMessage(null);
     } catch (error) {
       setTableMessage(
         error instanceof Error ? error.message : "The next hand could not start.",
@@ -626,7 +1021,14 @@ export function PocketPrototype() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [clearSuggestion, isSubmitting, loadEngineSituation, mode, situation]);
+  }, [
+    clearSuggestion,
+    isSubmitting,
+    loadEngineSituation,
+    mode,
+    presentTransition,
+    situation,
+  ]);
 
   useEffect(() => {
     if (
@@ -657,14 +1059,18 @@ export function PocketPrototype() {
     setTableMessage("Resetting the table…");
 
     try {
-      const next = await requestSituation(demoApiUrl("/api/games/demo/restart"), {
-        method: "POST",
-        body: JSON.stringify({ expectedStateVersion: situation.stateVersion }),
-      });
+      const transition = await requestTransition(
+        demoApiUrl("/api/games/demo/restart", judgeRunRef.current),
+        {
+          method: "POST",
+          body: JSON.stringify({ expectedStateVersion: situation.stateVersion }),
+        },
+      );
       autoNextHandVersionRef.current = null;
+      botAdvanceVersionRef.current = null;
       clearRecommendationReceipt();
-      setSituation(next);
-      setTableMessage(null);
+      const playback = await presentTransition(transition);
+      if (playback === "completed") setTableMessage(null);
     } catch (error) {
       setTableMessage(
         error instanceof Error ? error.message : "The table could not restart.",
@@ -683,21 +1089,14 @@ export function PocketPrototype() {
     isSubmitting,
     loadEngineSituation,
     mode,
+    presentTransition,
     situation,
   ]);
-
-  function useSuggestion(next: AgentSuggestion) {
-    if (!situation || !isSuggestionCurrent(situation, next)) {
-      clearSuggestion();
-      setTableMessage("Suggestion expired — the table changed.");
-      return;
-    }
-    commitHumanAction(next.action, next.amount);
-  }
 
   async function resetMockDemo() {
     if (timerRef.current) clearTimeout(timerRef.current);
     if (nextHandTimerRef.current) clearTimeout(nextHandTimerRef.current);
+    cancelPlayback();
     clearSuggestion();
 
     if (mode === "mock") {
@@ -715,10 +1114,8 @@ export function PocketPrototype() {
     setTableMessage("Retrying the authoritative live table…");
     try {
       await loadEngineSituation();
-    } catch {
-      setTableMessage(
-        "The authoritative live table is still unavailable. This remains a practice hand only.",
-      );
+    } catch (error) {
+      setTableMessage(practiceFallbackMessage(error, true));
     } finally {
       setIsRetryingLive(false);
     }
@@ -762,8 +1159,20 @@ export function PocketPrototype() {
     isRecommendationReceiptCurrent(situation, recommendationReceipt)
       ? recommendationReceipt
       : null;
-  const turnTitle = isSubmitting
-    ? "Playing your action"
+  const turnTitle = isPlayingTransition
+    ? situation.handResult
+      ? "Settling the hand"
+      : situation.isYourTurn
+        ? "Your turn is next"
+        : currentPlayer
+          ? `${currentPlayer.displayName} is acting`
+          : "Following the action"
+    : isSubmitting
+      ? currentPlayer && !situation.isYourTurn
+        ? `${currentPlayer.displayName} is acting`
+        : situation.handResult
+          ? "Dealing the next hand"
+          : "Playing your action"
     : situation.gameResult?.outcome === "won"
       ? "You won the table"
       : situation.gameResult?.outcome === "lost"
@@ -783,6 +1192,8 @@ export function PocketPrototype() {
       ? visibleReceipt.outcome === "followed"
         ? "Recommendation followed"
         : "Recommendation overridden"
+      : isPlayingTransition
+        ? "Following table action"
       : staleSuggestion
         ? "Recommendation expired"
         : supportState === "available"
@@ -819,6 +1230,7 @@ export function PocketPrototype() {
             betDraft={betDraft}
             betDraftError={betDraftError}
             betInputId="bet-amount"
+            recommendation={visibleSuggestion}
             practiceFallback={
               isPracticeFallback
                 ? {
@@ -846,16 +1258,20 @@ export function PocketPrototype() {
                     }
                   : null
             }
+            playback={
+              isPlayingTransition
+                ? {
+                    status: playbackStatus,
+                    onSkip: skipPlayback,
+                  }
+                : null
+            }
             onBetDraftChange={(value) => {
               setBetDraft(value);
               setBetDraftError(null);
             }}
             onCommit={commitHumanAction}
             onSubmitSizedAction={submitSizedAction}
-            onMax={(amount) => {
-              setBetDraft(String(amount));
-              setBetDraftError(null);
-            }}
           />
         </div>
 
@@ -880,8 +1296,8 @@ export function PocketPrototype() {
             supportState={supportState}
             activity={activity}
             registrationError={registrationError}
-            isSubmitting={isSubmitting}
-            onUse={useSuggestion}
+            isSubmitting={isSubmitting || isPlayingTransition}
+            isPlayingTransition={isPlayingTransition}
             onDismiss={() => {
               clearSuggestion();
               setTableMessage("Suggestion dismissed. Choose any legal action.");

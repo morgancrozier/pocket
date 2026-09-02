@@ -48,7 +48,7 @@ export function getDemoGameStore(
       mode === "judge"
         ? judgeGameId(authenticatedUserId, judgeRunId)
         : authenticatedUserId,
-    preparedJudgeDemo: mode === "judge",
+    judgeDemo: mode === "judge",
     repository: createSupabaseDemoGameRepository(),
   });
 }

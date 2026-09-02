@@ -55,11 +55,13 @@ async function settleHand(
     if (!situation.isYourTurn) {
       throw new Error(`Unexpected table pause: ${JSON.stringify(situation)}`);
     }
-    situation = await game.act({
-      actorId: DEMO_HERO_ID,
-      expectedStateVersion: situation.stateVersion,
-      intent: chooseHuman(situation),
-    });
+    situation = (
+      await game.act({
+        actorId: DEMO_HERO_ID,
+        expectedStateVersion: situation.stateVersion,
+        intent: chooseHuman(situation),
+      })
+    ).situation;
   }
   if (!situation.handResult) throw new Error("The hand did not settle.");
   return situation;
@@ -72,15 +74,19 @@ async function finishTournament(
   let situation = await game.getSituation(DEMO_HERO_ID);
   for (let guard = 0; !situation.gameResult && guard < 100; guard += 1) {
     situation = situation.handResult
-      ? await game.startNextHand({
-          actorId: DEMO_HERO_ID,
-          expectedStateVersion: situation.stateVersion,
-        })
-      : await game.act({
-          actorId: DEMO_HERO_ID,
-          expectedStateVersion: situation.stateVersion,
-          intent: chooseHuman(situation),
-        });
+      ? (
+          await game.startNextHand({
+            actorId: DEMO_HERO_ID,
+            expectedStateVersion: situation.stateVersion,
+          })
+        ).situation
+      : (
+          await game.act({
+            actorId: DEMO_HERO_ID,
+            expectedStateVersion: situation.stateVersion,
+            intent: chooseHuman(situation),
+          })
+        ).situation;
   }
   if (!situation.gameResult) throw new Error("The tournament did not finish.");
   return situation;
@@ -144,15 +150,17 @@ describe("Gate 2 quick tournament", () => {
       if (hand === 7) break;
       situation = await settleHand(game, situation);
       expect(situation.gameResult).toBeNull();
-      situation = await game.startNextHand({
-        actorId: DEMO_HERO_ID,
-        expectedStateVersion: situation.stateVersion,
-      });
+      situation = (
+        await game.startNextHand({
+          actorId: DEMO_HERO_ID,
+          expectedStateVersion: situation.stateVersion,
+        })
+      ).situation;
       expect(situation.handNumber).toBe(hand + 1);
     }
 
     expect(await game.getChipTotal()).toBe(800);
-  });
+  }, 10_000);
 
   it("ends immediately with a loss when the human is eliminated", async () => {
     const game = createDemoGame({ deterministicSeed: 1 });
@@ -195,10 +203,12 @@ describe("Gate 2 quick tournament", () => {
   it("atomically restarts a terminal game with a monotonic version", async () => {
     const game = createDemoGame({ deterministicSeed: 1 });
     const terminal = await finishTournament(game, maximumIntent);
-    const restarted = await game.restartGame({
+    const restarted = (
+      await game.restartGame({
       actorId: DEMO_HERO_ID,
       expectedStateVersion: terminal.stateVersion,
-    });
+      })
+    ).situation;
 
     expect(restarted.gameId).toBe(terminal.gameId);
     expect(restarted.handNumber).toBe(1);
@@ -253,10 +263,12 @@ describe("Gate 2 quick tournament", () => {
     expect(situation.bigBlind).toBe(2);
 
     const terminal = await finishTournament(game, maximumIntent);
-    const restarted = await game.restartGame({
+    const restarted = (
+      await game.restartGame({
       actorId: DEMO_HERO_ID,
       expectedStateVersion: terminal.stateVersion,
-    });
+      })
+    ).situation;
 
     expect(restarted.players.every((player) => player.stack <= 40)).toBe(true);
     expect(

@@ -1,4 +1,8 @@
+import { loadEnvConfig } from "@next/env";
 import { defineConfig, devices } from "@playwright/test";
+
+// Specs that talk to Supabase read the same .env.local that Next loads.
+loadEnvConfig(process.cwd());
 
 const configuredPort = process.env.POCKET_E2E_PORT;
 const port = configuredPort && /^\d+$/.test(configuredPort) ? configuredPort : "3000";

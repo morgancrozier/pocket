@@ -36,6 +36,7 @@ interface UsePokerToolsInput {
   viewerStatus?: RoomViewerStatus;
   observedRevision?: number;
   isRevisionCurrent?: () => boolean;
+  interactionLocked?: boolean;
 }
 
 function hasWebMCP(): boolean {
@@ -54,6 +55,7 @@ export function usePokerTools({
   viewerStatus = "seated",
   observedRevision,
   isRevisionCurrent,
+  interactionLocked = false,
 }: UsePokerToolsInput) {
   const [availabilityState, setAvailabilityState] =
     useState<WebMCPSupportState>("checking");
@@ -106,6 +108,7 @@ export function usePokerTools({
     (observedRevision === undefined ||
       (stateVersion !== undefined && stateVersion >= observedRevision)) &&
     viewerStatus === "seated" &&
+    !interactionLocked &&
     (roomPhase === undefined || roomPhase === "active");
 
   useEffect(() => {
@@ -215,6 +218,7 @@ export function usePokerTools({
     hasSituation,
     isYourTurn,
     isTerminal,
+    interactionLocked,
     handNumber,
     observedRevision,
     stateVersion,

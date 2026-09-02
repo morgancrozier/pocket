@@ -36,9 +36,13 @@ export function DebugPanel({
       situation.legalActions.find((action) => action.type === "fold");
 
     if (!legal || !situation.isYourTurn) return null;
+    const isSizedAction = legal.type === "bet" || legal.type === "raise";
     return {
       action: legal.type,
-      amount: legal.minTotal ?? legal.amount,
+      ...(isSizedAction && typeof legal.minTotal === "number"
+        ? { amount: legal.minTotal }
+        : {}),
+      stateVersion: situation.stateVersion,
       confidence: 0.74,
     };
   }
@@ -100,10 +104,11 @@ export function DebugPanel({
     onFallbackSuggestion({
       handNumber: situation.handNumber,
       stateVersion: situation.stateVersion,
-      ...legal,
+      action: legal.action,
+      amount: legal.amount,
     });
     setOutput(
-      "A legal recommendation was injected into local React state. No game action was sent.",
+      "A legal local test recommendation was injected into React state. It did not come from an agent, and no game action was sent.",
     );
   }
 

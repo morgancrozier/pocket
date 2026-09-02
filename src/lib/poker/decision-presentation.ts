@@ -11,6 +11,11 @@ export interface PresentedPublicAction {
   text: string;
 }
 
+export interface PublicActionCopy {
+  actionText: string;
+  amountText: string | null;
+}
+
 export interface SeatActionCue {
   label: string;
   ariaLabel: string;
@@ -28,6 +33,14 @@ interface DecisionPresentationOptions {
   isSpectating?: boolean;
   isComplete?: boolean;
 }
+
+const VOLUNTARY_ACTIONS = new Set<HandActionEvent["action"]>([
+  "fold",
+  "check",
+  "call",
+  "bet",
+  "raise",
+]);
 
 function chips(amount: number): string {
   return `${amount} chip${amount === 1 ? "" : "s"}`;
@@ -51,35 +64,84 @@ export function describePublicAction(
   event: HandActionEvent,
   viewerPlayerId: string,
 ): string {
+  const copy = presentPublicAction(event, viewerPlayerId);
+  return copy.amountText
+    ? `${copy.actionText} · ${copy.amountText}`
+    : copy.actionText;
+}
+
+export function presentPublicAction(
+  event: HandActionEvent,
+  viewerPlayerId: string,
+): PublicActionCopy {
   const actor = actionActor(event, viewerPlayerId);
+  const isViewer = event.playerId === viewerPlayerId;
+  const amountText =
+    typeof event.amount === "number" ? String(event.amount) : null;
+
   switch (event.action) {
     case "fold":
-      return `${actor} folded`;
+      return { actionText: `${actor} ${isViewer ? "fold" : "folds"}`, amountText: null };
     case "check":
-      return `${actor} checked`;
+      return { actionText: `${actor} ${isViewer ? "check" : "checks"}`, amountText: null };
     case "call":
-      return typeof event.amount === "number"
-        ? `${actor} called ${event.amount}`
-        : `${actor} called`;
+      return { actionText: `${actor} ${isViewer ? "call" : "calls"}`, amountText };
     case "bet":
-      return typeof event.amount === "number"
-        ? `${actor} bet ${event.amount}`
-        : `${actor} bet`;
+      return { actionText: `${actor} ${isViewer ? "bet" : "bets"}`, amountText };
     case "raise":
-      return typeof event.amount === "number"
-        ? `${actor} raised to ${event.amount}`
-        : `${actor} raised`;
+      return {
+        actionText: `${actor} ${isViewer ? "raise" : "raises"}${amountText ? " to" : ""}`,
+        amountText,
+      };
     case "small-blind":
-      return typeof event.amount === "number"
-        ? `${actor} posted the small blind of ${event.amount}`
-        : `${actor} posted the small blind`;
+      return {
+        actionText: `${actor} ${isViewer ? "post" : "posts"} the small blind`,
+        amountText,
+      };
     case "big-blind":
-      return typeof event.amount === "number"
-        ? `${actor} posted the big blind of ${event.amount}`
-        : `${actor} posted the big blind`;
+      return {
+        actionText: `${actor} ${isViewer ? "post" : "posts"} the big blind`,
+        amountText,
+      };
     case "deal":
-      return `${actor} dealt`;
+      return {
+        actionText: `${actor} ${isViewer ? "deal" : "deals"} the cards`,
+        amountText: null,
+      };
   }
+}
+
+export function describeDecisionCause(situation: PokerSituation): string {
+  const publicActions = situation.recentActions
+    .filter((event) => event.action !== "deal")
+    .toSorted((left, right) => left.sequence - right.sequence);
+
+  if (situation.isYourTurn && situation.toCall > 0) {
+    const aggressor = publicActions.findLast(
+      (event) =>
+        event.street === situation.street &&
+        (event.action === "bet" || event.action === "raise") &&
+        (typeof event.amount !== "number" || event.amount === situation.currentBet),
+    );
+    if (aggressor) {
+      const actor =
+        aggressor.playerId === situation.yourPlayerId
+          ? "your"
+          : `${aggressor.playerName}’s`;
+      if (aggressor.action === "bet" && typeof aggressor.amount === "number") {
+        return `Facing ${actor} ${aggressor.amount}-chip bet`;
+      }
+      if (aggressor.action === "raise" && typeof aggressor.amount === "number") {
+        return `Facing ${actor} raise to ${aggressor.amount}`;
+      }
+      return `Facing ${actor} ${aggressor.action}`;
+    }
+  }
+
+  const latest = publicActions.at(-1);
+  return latest
+    ? describePublicAction(latest, situation.yourPlayerId)
+    : "Waiting for the first action";
 }
 
 function cueLabel(event: HandActionEvent): string {
@@ -87,15 +149,15 @@ function cueLabel(event: HandActionEvent): string {
     case "fold":
       return "Folded";
     case "check":
-      return "Checked";
+      return "Check";
     case "call":
-      return typeof event.amount === "number" ? `Called ${event.amount}` : "Called";
+      return typeof event.amount === "number" ? `Call ${event.amount}` : "Call";
     case "bet":
       return typeof event.amount === "number" ? `Bet ${event.amount}` : "Bet";
     case "raise":
       return typeof event.amount === "number"
-        ? `Raised to ${event.amount}`
-        : "Raised";
+        ? `Raise to ${event.amount}`
+        : "Raise";
     case "small-blind":
       return typeof event.amount === "number"
         ? `Small blind ${event.amount}`
@@ -105,7 +167,7 @@ function cueLabel(event: HandActionEvent): string {
         ? `Big blind ${event.amount}`
         : "Big blind";
     case "deal":
-      return "Dealt";
+      return "Deals";
   }
 }
 
@@ -183,25 +245,34 @@ export function createDecisionPresentation(
     .toSorted((left, right) => left.sequence - right.sequence);
   const recent = publicActions.slice(-3);
   const latest = publicActions.at(-1) ?? null;
-  const latestOnStreet = publicActions
-    .filter((event) => event.street === situation.street)
-    .at(-1);
+  const currentStreetActions = publicActions.filter(
+    (event) => event.street === situation.street,
+  );
+  const seatActionSource = currentStreetActions.length
+    ? currentStreetActions
+    : publicActions.filter((event) => VOLUNTARY_ACTIONS.has(event.action));
+  const latestSeatAction = seatActionSource.at(-1);
   const seatCues: Record<string, SeatActionCue> = {};
 
   for (const player of situation.players) {
-    if (latestOnStreet?.playerId === player.id) {
-      const label = cueLabel(latestOnStreet);
+    const playerAction = seatActionSource.findLast(
+      (event) => event.playerId === player.id,
+    );
+
+    if (playerAction) {
+      const label = cueLabel(playerAction);
       seatCues[player.id] = {
         label,
         ariaLabel: `${player.displayName} ${label.toLowerCase()}`,
-        isLatest: true,
+        isLatest: playerAction.sequence === latestSeatAction?.sequence,
       };
       continue;
     }
-    if (player.committedThisStreet > 0) {
+
+    if (player.status === "folded") {
       seatCues[player.id] = {
-        label: `In ${player.committedThisStreet}`,
-        ariaLabel: `${player.displayName} has ${chips(player.committedThisStreet)} committed this street`,
+        label: "Folded",
+        ariaLabel: `${player.displayName} folded earlier in this hand`,
         isLatest: false,
       };
     }

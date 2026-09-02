@@ -25,9 +25,23 @@ function createSituation(
     pot: 68,
     currentBet: 44,
     toCall: 32,
+    lastFullRaiseSize: 20,
     smallBlind: 1,
     bigBlind: 2,
     dealerSeat: 0,
+    smallBlindSeat: 0,
+    bigBlindSeat: 1,
+    pots: [
+      {
+        index: 0,
+        type: "main",
+        amount: 68,
+        eligiblePlayerIds: ["hero", "bot-1"],
+        winnerPlayerIds: [],
+        awards: [],
+      },
+    ],
+    unmatchedContribution: null,
     legalActions: [
       { type: "fold" },
       { type: "call", amount: 32 },
@@ -152,6 +166,12 @@ describe("createSuggestActionTool", () => {
         stateVersion: 4,
         legalActions: situation.legalActions,
       },
+    });
+    expect(
+      JSON.parse(await tool.execute({ action: "raise", stateVersion: 4 })),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "MISSING_AMOUNT" },
     });
     expect(
       JSON.parse(
@@ -430,8 +450,31 @@ describe("Poker WebMCP definitions", () => {
     expect(stateVersionSchema.description).toContain("get_current_situation");
     expect(readTools[0]!.description).toContain("authoritative");
     expect(readTools[0]!.description).toContain(
-      "blind posts never imply another player folded",
+      "Forced posts are separate from voluntary actions",
     );
+    expect(readTools[0]!.annotations).toEqual({
+      readOnlyHint: true,
+      untrustedContentHint: true,
+    });
+    expect(readTools[1]!.annotations).toEqual({
+      readOnlyHint: true,
+      untrustedContentHint: true,
+    });
+    expect(suggestionTool.annotations).toEqual({
+      readOnlyHint: false,
+      untrustedContentHint: false,
+    });
+    for (const tool of tools) {
+      expect(tool.name.length).toBeLessThanOrEqual(30);
+      expect(tool.description.length).toBeLessThanOrEqual(500);
+      for (const property of Object.values(
+        tool.inputSchema.properties ?? {},
+      ) as Array<{ description?: string }>) {
+        if (property.description) {
+          expect(property.description.length).toBeLessThanOrEqual(150);
+        }
+      }
+    }
   });
 
   it("marks eliminated read output as spectator-safe without restoring advice", async () => {
@@ -466,5 +509,39 @@ describe("Poker WebMCP definitions", () => {
       "get_current_situation",
       "get_hand_history",
     ]);
+  });
+});
+
+describe("tool activity frames", () => {
+  it("does not stall a tool call while the document is hidden", async () => {
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+    vi.stubGlobal("document", { visibilityState: "hidden" });
+    const situation = createSituation();
+    const [situationTool] = createReadPokerTools({
+      getSituation: () => situation,
+      getHandHistory: () => situation.recentActions,
+      onActivity: vi.fn(),
+    });
+
+    expect(JSON.parse(await situationTool.execute({}))).toMatchObject({
+      stateVersion: 4,
+    });
+  });
+
+  it("bounds the activity frame wait when frames never fire", async () => {
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+    vi.stubGlobal("document", { visibilityState: "visible" });
+    const situation = createSituation();
+    const tool = createSuggestActionTool({
+      getSituation: () => situation,
+      onSuggestion: vi.fn(),
+      onActivity: vi.fn(),
+    });
+    const startedAt = Date.now();
+
+    expect(
+      JSON.parse(await tool.execute({ action: "call", stateVersion: 4 })),
+    ).toMatchObject({ ok: true });
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 });
