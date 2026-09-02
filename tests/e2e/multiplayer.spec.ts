@@ -252,23 +252,25 @@ test("real two-browser room remains seat-safe through spectating and restart", a
     const ownerToolView = (await executeTool(
       pageA,
       "get_current_situation",
-    )) as PlayingRoomSnapshot["situation"] & {
-      roomPhase: string;
-      viewerStatus: string;
+    )) as {
+      contractVersion: number;
+      hero: { seat: number; name: string; cards: string[] };
+      room: { phase: string; viewerStatus: string };
     };
     const guestToolView = (await executeTool(
       pageB,
       "get_current_situation",
-    )) as PlayingRoomSnapshot["situation"] & {
-      roomPhase: string;
-      viewerStatus: string;
+    )) as {
+      contractVersion: number;
+      hero: { seat: number; name: string; cards: string[] };
+      room: { phase: string; viewerStatus: string };
     };
-    expect(ownerToolView.yourPlayerId).toBe(owner.viewer.playerId);
-    expect(ownerToolView.yourCards).toEqual(owner.situation.yourCards);
-    expect(guestToolView.yourPlayerId).toBe(guest.viewer.playerId);
-    expect(guestToolView.yourCards).toEqual(guest.situation.yourCards);
-    expect(ownerToolView.roomPhase).toBe("active");
-    expect(guestToolView.viewerStatus).toBe("seated");
+    expect(ownerToolView.contractVersion).toBe(3);
+    expect(ownerToolView.hero.cards).toEqual(owner.situation.yourCards);
+    expect(guestToolView.hero.cards).toEqual(guest.situation.yourCards);
+    expect(ownerToolView.hero.seat).not.toBe(guestToolView.hero.seat);
+    expect(ownerToolView.room.phase).toBe("active");
+    expect(guestToolView.room.viewerStatus).toBe("seated");
 
     const actingPage =
       owner.situation.currentActorId === owner.viewer.playerId ? pageA : pageB;
@@ -392,8 +394,8 @@ test("real two-browser room remains seat-safe through spectating and restart", a
             const current = (await executeTool(
               spectator.page,
               "get_current_situation",
-            )) as Record<string, unknown>;
-            return current.viewerStatus;
+            )) as { room?: { viewerStatus?: string } };
+            return current.room?.viewerStatus;
           })
           .toBe("eliminated");
         const view = (await executeTool(
@@ -401,10 +403,9 @@ test("real two-browser room remains seat-safe through spectating and restart", a
           "get_current_situation",
         )) as Record<string, unknown>;
         expect(view).toMatchObject({
-          viewerStatus: "eliminated",
-          yourCards: [],
+          room: { viewerStatus: "eliminated" },
+          hero: { cards: [] },
           legalActions: [],
-          isYourTurn: false,
         });
         safePayload(view);
         spectatorChecked = true;

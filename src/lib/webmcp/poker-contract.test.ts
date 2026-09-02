@@ -121,6 +121,9 @@ async function captureRawTools(
   const currentRaw = await currentTool!.execute({});
   const historyRaw = await historyTool!.execute({});
 
+  expect(currentRaw.length).toBeLessThanOrEqual(3_000);
+  expect(historyRaw.length).toBeLessThanOrEqual(2_500);
+
   for (const player of players) {
     if (player.id === viewerId) continue;
     const publicPlayer = situation.players.find(
@@ -148,61 +151,72 @@ async function captureRawTools(
   };
 }
 
+function eventObjects(fields: string[], rows: unknown[][]) {
+  return rows.map((row) =>
+    Object.fromEntries(fields.map((field, index) => [field, row[index]])),
+  );
+}
+
+function historyEvents(payload: { history: { eventFields: string[]; events: unknown[][] } }) {
+  return eventObjects(payload.history.eventFields, payload.history.events);
+}
+
+function currentEvents(payload: {
+  current: { context: { eventFields: string[]; recentEvents: unknown[][] } };
+}) {
+  return eventObjects(
+    payload.current.context.eventFields,
+    payload.current.context.recentEvents,
+  );
+}
+
 describe("authoritative WebMCP poker contract scenarios", () => {
   it("1. reports normal 1/2 preflop call and minimum raise totals", async () => {
     const players = playersWithHeroAt(3);
     const payload = await captureRawTools(createGame(players), "hero", players);
 
     expect(payload.current).toMatchObject({
-      contractVersion: 2,
-      gameVariant: "texas-holdem",
-      bettingStructure: "no-limit",
-      stakes: "play-money",
-      handId: "webmcp-contract:hand:1",
-      handNumber: 1,
-      stateVersion: 1,
-      street: "preflop",
-      currentBetToMatch: 2,
-      amountToCall: 2,
-      lastFullRaiseIncrement: 2,
-      nextToAct: { playerId: "hero", seat: 3, isHero: true },
+      contractVersion: 3,
+      game: {
+        gameId: "webmcp-contract",
+        handId: "hand:1",
+        handNumber: 1,
+        stateVersion: 1,
+        street: "preflop",
+        variant: "texas-holdem",
+        bettingStructure: "no-limit",
+        stakes: "play-money",
+      },
       hero: {
-        playerId: "hero",
         seat: 3,
+        name: "Morgan",
         cards: expect.any(Array),
         stack: 100,
         status: "active",
         committedThisStreet: 0,
       },
-      positions: {
-        button: { playerId: "player-0", seat: 0 },
-        smallBlind: { playerId: "player-1", seat: 1, amount: 1 },
-        bigBlind: { playerId: "player-2", seat: 2, amount: 2 },
-        nominalPreflopOrder: [
-          { playerId: "hero" },
-          { playerId: "player-0" },
-          { playerId: "player-1" },
-          { playerId: "player-2" },
-        ],
-      },
-      potBreakdown: {
-        total: 3,
-        mainPot: { amount: 2 },
-        sidePots: [],
-        unmatchedContribution: {
-          amount: 1,
-          player: { playerId: "player-2" },
+      table: {
+        currentBetToMatch: 2,
+        amountToCall: 2,
+        lastFullRaiseIncrement: 2,
+        buttonSeat: 0,
+        blinds: {
+          small: { seat: 1, amount: 1 },
+          big: { seat: 2, amount: 2 },
+        },
+        nextToAct: { seat: 3, name: "Morgan", isHero: true },
+        pot: {
+          total: 3,
+          layers: [{ amount: 2 }],
+          unmatchedContribution: { amount: 1, seat: 2 },
         },
       },
       legalActions: [
         { type: "fold" },
         {
           type: "call",
-          amount: 2,
           amountToAdd: 2,
           finalStreetTotal: 2,
-          isAllIn: false,
-          matchesCurrentBet: true,
         },
         {
           type: "raise",
@@ -212,9 +226,9 @@ describe("authoritative WebMCP poker contract scenarios", () => {
         },
       ],
     });
-    expect(payload.history.actionHistory).toMatchObject([
-      { category: "forced-post", action: "small-blind", amountAdded: 1 },
-      { category: "forced-post", action: "big-blind", amountAdded: 2 },
+    expect(historyEvents(payload)).toMatchObject([
+      { category: "forced", seat: 1, action: "small-blind", amountAdded: 1 },
+      { category: "forced", seat: 2, action: "big-blind", amountAdded: 2 },
     ]);
   });
 
@@ -230,17 +244,19 @@ describe("authoritative WebMCP poker contract scenarios", () => {
     );
 
     expect(payload.current).toMatchObject({
-      street: "flop",
-      currentBetToMatch: 0,
-      amountToCall: 0,
-      nextToAct: { playerId: "hero", isHero: true },
-      actionContext: { bettingRoundState: "checked" },
+      game: { street: "flop" },
+      table: {
+        currentBetToMatch: 0,
+        amountToCall: 0,
+        nextToAct: { seat: 0, isHero: true },
+      },
+      context: { bettingRoundState: "checked" },
     });
     expect(actionTypes).toContain("check");
     expect(actionTypes).toContain("bet");
     expect(actionTypes).not.toContain("call");
     expect(actionTypes).not.toContain("raise");
-    expect(payload.current.actionHistory).toEqual(payload.history.actionHistory);
+    expect(currentEvents(payload)).toEqual(historyEvents(payload).slice(-6));
   });
 
   it("3. reports fold, call, and raise when hero faces an opening bet", async () => {
@@ -255,21 +271,19 @@ describe("authoritative WebMCP poker contract scenarios", () => {
     const payload = await captureRawTools(state, "hero", players);
 
     expect(payload.current).toMatchObject({
-      currentBetToMatch: 2,
-      amountToCall: 2,
+      table: { currentBetToMatch: 2, amountToCall: 2 },
       legalActions: [
         { type: "fold" },
-        { type: "call", amountToAdd: 2, isAllIn: false },
+        { type: "call", amountToAdd: 2 },
         { type: "raise", minTotal: 4 },
       ],
-      actionContext: { bettingRoundState: "bet" },
+      context: { bettingRoundState: "bet" },
     });
-    expect(payload.history.actionHistory.at(-3)).toMatchObject({
-      category: "voluntary-action",
+    expect(historyEvents(payload).at(-3)).toMatchObject({
+      category: "voluntary",
       action: "bet",
       amountAdded: 2,
       finalStreetTotal: 2,
-      amountMeaning: "final-street-total",
     });
   });
 
@@ -286,14 +300,15 @@ describe("authoritative WebMCP poker contract scenarios", () => {
     const payload = await captureRawTools(state, "hero", players);
 
     expect(payload.current).toMatchObject({
-      currentBetToMatch: 7,
-      amountToCall: 3,
-      lastFullRaiseIncrement: 3,
-      potBreakdown: {
-        total: 14,
-        mainPot: { amount: 11 },
-        sidePots: [],
-        unmatchedContribution: { amount: 3 },
+      table: {
+        currentBetToMatch: 7,
+        amountToCall: 3,
+        lastFullRaiseIncrement: 3,
+        pot: {
+          total: 14,
+          layers: [{ amount: 11 }],
+          unmatchedContribution: { amount: 3 },
+        },
       },
       legalActions: expect.arrayContaining([
         expect.objectContaining({
@@ -306,7 +321,7 @@ describe("authoritative WebMCP poker contract scenarios", () => {
     expect(payload.current.legalActions).not.toEqual(
       expect.arrayContaining([{ type: "raise", minTotal: 14 }]),
     );
-    expect(payload.history.actionHistory).toEqual(payload.current.actionHistory);
+    expect(currentEvents(payload)).toEqual(historyEvents(payload).slice(-6));
   });
 
   it("5. distinguishes chips to add from the current street wager", async () => {
@@ -322,19 +337,19 @@ describe("authoritative WebMCP poker contract scenarios", () => {
     const payload = await captureRawTools(state, "hero", players);
 
     expect(payload.current.hero.committedThisStreet).toBe(4);
-    expect(payload.current.currentBetToMatch).toBe(7);
-    expect(payload.current.amountToCall).toBe(3);
+    expect(payload.current.table.currentBetToMatch).toBe(7);
+    expect(payload.current.table.amountToCall).toBe(3);
     expect(
       payload.current.legalActions.find(
         (action: { type: string }) => action.type === "call",
       ),
     ).toMatchObject({
-      amount: 3,
-      amountMeaning: "chips-to-add",
       amountToAdd: 3,
       finalStreetTotal: 7,
     });
-    expect(payload.history.stateVersion).toBe(payload.current.stateVersion);
+    expect(payload.history.game.stateVersion).toBe(
+      payload.current.game.stateVersion,
+    );
   });
 
   it("6. caps amountToCall at a short hero stack and marks the call all-in", async () => {
@@ -350,12 +365,10 @@ describe("authoritative WebMCP poker contract scenarios", () => {
     );
 
     expect(payload.current).toMatchObject({
-      currentBetToMatch: 10,
-      amountToCall: 3,
+      table: { currentBetToMatch: 10, amountToCall: 3 },
       hero: { stack: 3, committedThisStreet: 0 },
     });
     expect(call).toMatchObject({
-      amount: 3,
       amountToAdd: 3,
       finalStreetTotal: 3,
       isAllIn: true,
@@ -364,7 +377,7 @@ describe("authoritative WebMCP poker contract scenarios", () => {
     expect(payload.current.legalActions).not.toEqual(
       expect.arrayContaining([{ type: "raise" }]),
     );
-    expect(payload.history.actionHistory.at(-1)).toMatchObject({
+    expect(historyEvents(payload).at(-1)).toMatchObject({
       action: "raise",
       finalStreetTotal: 10,
     });
@@ -386,21 +399,21 @@ describe("authoritative WebMCP poker contract scenarios", () => {
     );
 
     expect(payload.current).toMatchObject({
-      currentBetToMatch: 15,
-      amountToCall: 5,
-      lastFullRaiseIncrement: 8,
       hero: { committedThisStreet: 10 },
-      potBreakdown: {
-        total: 50,
-        mainPot: { amount: 40 },
-        sidePots: [{ amount: 10 }],
-        unmatchedContribution: null,
+      table: {
+        currentBetToMatch: 15,
+        amountToCall: 5,
+        lastFullRaiseIncrement: 8,
+        pot: {
+          total: 50,
+          layers: [{ amount: 40 }, { amount: 10 }],
+        },
       },
     });
     expect(actionTypes).toEqual(["fold", "call"]);
-    expect(payload.history.actionHistory).toEqual(payload.current.actionHistory);
-    expect(payload.current.actionHistory.at(-2)).toMatchObject({
-      playerId: playerIdAt(players, 1),
+    expect(currentEvents(payload)).toEqual(historyEvents(payload).slice(-6));
+    expect(currentEvents(payload).at(-2)).toMatchObject({
+      seat: 1,
       action: "raise",
       amountAdded: 14,
       finalStreetTotal: 15,
@@ -420,26 +433,25 @@ describe("authoritative WebMCP poker contract scenarios", () => {
     const payload = await captureRawTools(state, "hero", players);
 
     expect(payload.current).toMatchObject({
-      street: "showdown",
-      pot: 270,
-      potBreakdown: {
-        total: 270,
-        mainPot: { index: 0, type: "main", amount: 80 },
-        sidePots: [
-          { index: 1, type: "side", amount: 90 },
-          { index: 2, type: "side", amount: 100 },
-        ],
-        unmatchedContribution: null,
+      game: { street: "showdown" },
+      table: {
+        pot: {
+          total: 270,
+          layers: [
+            { type: "main", amount: 80 },
+            { type: "side", amount: 90 },
+            { type: "side", amount: 100 },
+          ],
+        },
       },
       terminal: {
         handComplete: true,
-        handResult: { reason: "showdown" },
-        showdown: { board: expect.any(Array), revealedHands: expect.any(Array) },
+        endedBy: "showdown",
+        revealedHands: expect.any(Array),
       },
     });
     expect(payload.history).toMatchObject({
-      terminal: { handComplete: true },
-      handResult: { reason: "showdown" },
+      terminal: { handComplete: true, endedBy: "showdown" },
     });
   });
 
@@ -449,22 +461,40 @@ describe("authoritative WebMCP poker contract scenarios", () => {
     let payload = await captureRawTools(state, "hero", players);
 
     expect(payload.current).toMatchObject({
-      street: "preflop",
-      nextToAct: { playerId: "hero", isHero: true },
-      positions: {
-        button: { playerId: "hero", seat: 0 },
-        smallBlind: { playerId: "hero", seat: 0, amount: 1 },
-        bigBlind: { playerId: "villain", seat: 1, amount: 2 },
-        nominalPreflopOrder: [
-          { playerId: "hero" },
-          { playerId: "villain" },
-        ],
-        nominalPostflopOrder: [
-          { playerId: "villain" },
-          { playerId: "hero" },
-        ],
+      game: { street: "preflop" },
+      hero: {
+        seat: 0,
+        position: {
+          roles: ["button", "small-blind"],
+          preflop: 1,
+          postflop: 2,
+        },
       },
-      amountToCall: 1,
+      table: {
+        amountToCall: 1,
+        buttonSeat: 0,
+        blinds: {
+          small: { seat: 0, amount: 1 },
+          big: { seat: 1, amount: 2 },
+        },
+        nextToAct: { seat: 0, isHero: true },
+      },
+      players: [
+        expect.objectContaining({
+          seat: 0,
+          position: {
+            preflop: 1,
+            postflop: 2,
+          },
+        }),
+        expect.objectContaining({
+          seat: 1,
+          position: {
+            preflop: 2,
+            postflop: 1,
+          },
+        }),
+      ],
     });
 
     state = act(state, "hero", { action: "call" });
@@ -476,11 +506,11 @@ describe("authoritative WebMCP poker contract scenarios", () => {
     state = act(state, "villain", { action: "check" });
     payload = await captureRawTools(state, "hero", players);
     expect(payload.current).toMatchObject({
-      street: "flop",
-      nextToAct: { playerId: "hero", isHero: true },
+      game: { street: "flop" },
+      table: { nextToAct: { seat: 0, isHero: true } },
     });
-    expect(payload.history.actionHistory.at(-1)).toMatchObject({
-      playerId: "villain",
+    expect(historyEvents(payload).at(-1)).toMatchObject({
+      seat: 1,
       street: "flop",
       action: "check",
     });
@@ -497,22 +527,22 @@ describe("authoritative WebMCP poker contract scenarios", () => {
     state = act(state, playerIdAt(players, 2), { action: "check" });
     const payload = await captureRawTools(state, "hero", players);
 
-    expect(payload.current.actionContext.foldedPlayers).toEqual([
+    expect(payload.current.context.foldedPlayers).toEqual([
       {
-        playerId: playerIdAt(players, 3),
-        playerName: "Player 3",
+        seat: 3,
+        name: "Player 3",
         street: "preflop",
       },
     ]);
     expect(
-      payload.current.actionHistory.filter(
-        (event: { action: string }) => event.action === "fold",
+      historyEvents(payload).filter(
+        (event) => event.action === "fold",
       ),
     ).toHaveLength(1);
-    expect(payload.current.situationSummary).toContain(
-      "Folded earlier this hand: Player 3.",
+    expect(payload.current.context.summary).toContain(
+      "Folded: Player 3.",
     );
-    expect(payload.history.actionHistory).toEqual(payload.current.actionHistory);
+    expect(currentEvents(payload)).toEqual(historyEvents(payload).slice(-6));
   });
 
   it("11. rejects a recommendation after an authoritative table change", async () => {
@@ -532,8 +562,8 @@ describe("authoritative WebMCP poker contract scenarios", () => {
       await tool.execute({ action: "call", stateVersion: originalVersion }),
     );
 
-    expect(payload.current.stateVersion).toBe(originalVersion + 1);
-    expect(payload.history.stateVersion).toBe(originalVersion + 1);
+    expect(payload.current.game.stateVersion).toBe(originalVersion + 1);
+    expect(payload.history.game.stateVersion).toBe(originalVersion + 1);
     expect(result).toMatchObject({
       ok: false,
       error: { code: "STALE_STATE" },
@@ -643,7 +673,7 @@ describe("authoritative WebMCP poker contract scenarios", () => {
       maxTotal: 100,
       amountMeaning: "final-street-total",
     });
-    expect(payload.current.actionHistory.slice(2, 4)).toMatchObject([
+    expect(historyEvents(payload).slice(2, 4)).toMatchObject([
       { action: "raise", finalStreetTotal: 4 },
       { action: "raise", finalStreetTotal: 7 },
     ]);

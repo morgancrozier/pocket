@@ -41,13 +41,15 @@ export type PokerToolActivityEvent = {
   message?: string;
 };
 
+type PokerRoomContext = {
+  roomPhase: RoomPhase;
+  viewerStatus: RoomViewerStatus;
+};
+
 interface SituationToolContext {
   getSituation: () => PokerSituation | null;
   onActivity?: (event: PokerToolActivityEvent) => void;
-  getRoomContext?: () => {
-    roomPhase: RoomPhase;
-    viewerStatus: RoomViewerStatus;
-  } | null;
+  getRoomContext?: () => PokerRoomContext | null;
 }
 
 interface HandHistoryToolContext extends SituationToolContext {
@@ -92,10 +94,57 @@ function requireSituation(
   const situation = getSituation();
 
   if (!situation) {
-    throw new Error("No player-safe poker situation is currently available.");
+    throw new PokerToolReadError(
+      "NO_SITUATION",
+      "No player-safe poker situation is currently available.",
+      "Wait for Pocket to finish loading, then call the read tool again.",
+    );
   }
 
   return situation;
+}
+
+type ReadFailureCode =
+  | "NO_SITUATION"
+  | "INVALID_SAFE_PROJECTION"
+  | "READ_UNAVAILABLE";
+
+class PokerToolReadError extends Error {
+  readonly code: ReadFailureCode;
+  readonly recovery: string;
+
+  constructor(code: ReadFailureCode, message: string, recovery: string) {
+    super(message);
+    this.name = "PokerToolReadError";
+    this.code = code;
+    this.recovery = recovery;
+  }
+}
+
+function readFailure(error: unknown): {
+  message: string;
+  serialized: string;
+} {
+  const failure =
+    error instanceof PokerToolReadError
+      ? error
+      : new PokerToolReadError(
+          "READ_UNAVAILABLE",
+          "Pocket could not read the current player-safe table state.",
+          "Wait for the table to settle, then call the read tool again.",
+        );
+
+  return {
+    message: failure.message,
+    serialized: JSON.stringify({
+      ok: false,
+      error: {
+        code: failure.code,
+        message: failure.message,
+        recovery: failure.recovery,
+      },
+    }),
+  };
 }
 
 function parseAction(value: unknown): PokerActionType | null {
@@ -126,25 +175,16 @@ function suggestionFailure(
   });
 }
 
-type PlayerReference = {
-  playerId: string;
-  playerName: string;
+type AgentPlayerReference = {
   seat: number;
+  name: string;
 };
 
-function playerReference(player: PublicPlayerView): PlayerReference {
+function playerReference(player: PublicPlayerView): AgentPlayerReference {
   return {
-    playerId: player.id,
-    playerName: player.displayName,
     seat: player.seat,
+    name: player.displayName,
   };
-}
-
-function playerAtSeat(
-  situation: PokerSituation,
-  seat: number,
-): PublicPlayerView | null {
-  return situation.players.find((player) => player.seat === seat) ?? null;
 }
 
 function currentHandPlayers(situation: PokerSituation): PublicPlayerView[] {
@@ -195,17 +235,29 @@ function positionFor(
   situation: PokerSituation,
   orders: ReturnType<typeof nominalPositionOrders>,
 ) {
+  const roles: Array<"button" | "small-blind" | "big-blind"> = [];
+  if (player.seat === situation.dealerSeat) roles.push("button");
+  if (player.seat === situation.smallBlindSeat) roles.push("small-blind");
+  if (player.seat === situation.bigBlindSeat) roles.push("big-blind");
+
   return {
-    isButton: player.seat === situation.dealerSeat,
-    isSmallBlind: player.seat === situation.smallBlindSeat,
-    isBigBlind: player.seat === situation.bigBlindSeat,
-    nominalPreflopOrder:
+    ...(roles.length ? { roles } : {}),
+    preflop:
       orders.preflop.findIndex((candidate) => candidate.id === player.id) + 1 ||
       null,
-    nominalPostflopOrder:
+    postflop:
       orders.postflop.findIndex((candidate) => candidate.id === player.id) + 1 ||
       null,
   };
+}
+
+function positionOrderFor(
+  player: PublicPlayerView,
+  situation: PokerSituation,
+  orders: ReturnType<typeof nominalPositionOrders>,
+) {
+  const position = positionFor(player, situation, orders);
+  return { preflop: position.preflop, postflop: position.postflop };
 }
 
 function agentLegalActions(
@@ -219,12 +271,13 @@ function agentLegalActions(
       const amountToAdd = action.amount ?? situation.toCall;
       const finalStreetTotal = hero.committedThisStreet + amountToAdd;
       return {
-        ...action,
-        amountMeaning: "chips-to-add",
+        type: action.type,
         amountToAdd,
         finalStreetTotal,
-        isAllIn: amountToAdd === hero.stack,
-        matchesCurrentBet: finalStreetTotal === situation.currentBet,
+        ...(amountToAdd === hero.stack ? { isAllIn: true } : {}),
+        ...(finalStreetTotal !== situation.currentBet
+          ? { matchesCurrentBet: false }
+          : {}),
       };
     }
 
@@ -232,8 +285,8 @@ function agentLegalActions(
       return {
         ...action,
         amountMeaning: "final-street-total",
-        minTotalIsAllIn: action.minTotal === allInTotal,
-        maxTotalIsAllIn: action.maxTotal === allInTotal,
+        ...(action.minTotal === allInTotal ? { minTotalIsAllIn: true } : {}),
+        ...(action.maxTotal === allInTotal ? { maxTotalIsAllIn: true } : {}),
       };
     }
 
@@ -241,8 +294,14 @@ function agentLegalActions(
   });
 }
 
-function agentActionHistory(actions: readonly HandActionEvent[]) {
+function agentActionHistory(
+  situation: PokerSituation,
+  actions: readonly HandActionEvent[],
+) {
   const streetCommitments = new Map<string, number>();
+  const seatsByPlayerId = new Map(
+    situation.players.map((player) => [player.id, player.seat]),
+  );
 
   return actions.map((event) => {
     const commitmentKey = `${event.street}:${event.playerId}`;
@@ -271,17 +330,16 @@ function agentActionHistory(actions: readonly HandActionEvent[]) {
     return {
       sequence: event.sequence,
       street: event.street,
-      playerId: event.playerId,
-      playerName: event.playerName,
+      seat: seatsByPlayerId.get(event.playerId) ?? null,
+      name: event.playerName,
       category: isForced
-        ? "forced-post"
+        ? "forced"
         : event.action === "deal"
           ? "system"
-          : "voluntary-action",
+          : "voluntary",
       action: event.action,
       ...(amountAdded === undefined ? {} : { amountAdded }),
       ...(finalStreetTotal === undefined ? {} : { finalStreetTotal }),
-      ...(isSizedAction ? { amountMeaning: "final-street-total" } : {}),
     };
   });
 }
@@ -290,131 +348,178 @@ function potLayer(
   situation: PokerSituation,
   pot: PokerSituation["pots"][number],
 ) {
-  const referenceFor = (playerId: string) => {
-    const player = situation.players.find((candidate) => candidate.id === playerId);
-    return player ? playerReference(player) : { playerId };
-  };
+  const seatFor = (playerId: string) =>
+    requireProjectedPlayer(situation, playerId).seat;
 
   return {
-    index: pot.index,
     type: pot.type,
     amount: pot.amount,
-    eligiblePlayers: pot.eligiblePlayerIds.map(referenceFor),
-    winnerPlayers: pot.winnerPlayerIds.map(referenceFor),
-    awards: pot.awards.map((award) => ({
-      player: referenceFor(award.playerId),
-      amount: award.amount,
-    })),
+    eligibleSeats: pot.eligiblePlayerIds.map(seatFor),
   };
 }
 
-function agentSituation(situation: PokerSituation) {
-  const grounded = groundPokerSituation(situation);
-  const hero = situation.players.find(
-    (player) => player.id === situation.yourPlayerId,
-  );
-  if (!hero) {
-    throw new Error("The player-safe situation does not include the hero seat.");
+function requireProjectedPlayer(
+  situation: PokerSituation,
+  playerId: string,
+): PublicPlayerView {
+  const player = situation.players.find((candidate) => candidate.id === playerId);
+  if (!player) {
+    throw new PokerToolReadError(
+      "INVALID_SAFE_PROJECTION",
+      "The player-safe table projection is incomplete.",
+      "Refresh Pocket, then call get_current_situation again.",
+    );
+  }
+  return player;
+}
+
+function validateSafeProjection(
+  situation: PokerSituation,
+  events: readonly HandActionEvent[] = situation.recentActions,
+): void {
+  requireProjectedPlayer(situation, situation.yourPlayerId);
+
+  if (situation.currentActorId) {
+    requireProjectedPlayer(situation, situation.currentActorId);
   }
 
-  const orders = nominalPositionOrders(situation);
-  const button = playerAtSeat(situation, situation.dealerSeat);
-  const smallBlind = playerAtSeat(situation, situation.smallBlindSeat);
-  const bigBlind = playerAtSeat(situation, situation.bigBlindSeat);
-  const currentActor = situation.players.find(
-    (player) => player.id === situation.currentActorId,
-  );
-  const unmatchedPlayer = situation.unmatchedContribution
-    ? situation.players.find(
-        (player) => player.id === situation.unmatchedContribution?.playerId,
-      )
-    : null;
+  for (const event of events) {
+    requireProjectedPlayer(situation, event.playerId);
+  }
+}
+
+function gameIdentity(situation: PokerSituation) {
+  return {
+    gameId: situation.gameId,
+    handId: `hand:${situation.handNumber}`,
+    handNumber: situation.handNumber,
+    stateVersion: situation.stateVersion,
+    street: situation.street,
+    variant: "texas-holdem",
+    bettingStructure: "no-limit",
+    stakes: "play-money",
+  };
+}
+
+function agentTerminal(situation: PokerSituation) {
   const revealedHands = situation.players
     .filter((player) => player.revealedCards?.length)
     .map((player) => ({
-      player: playerReference(player),
+      ...playerReference(player),
       cards: player.revealedCards,
     }));
 
   return {
-    ...grounded,
-    contractVersion: 2,
-    gameVariant: "texas-holdem",
-    bettingStructure: "no-limit",
-    stakes: "play-money",
-    handId: `${situation.gameId}:hand:${situation.handNumber}`,
+    handComplete: situation.handResult !== null,
+    gameComplete: situation.gameResult !== null,
+    ...(situation.handResult
+      ? {
+          endedBy: situation.handResult.reason,
+          winners: situation.handResult.winners.map((winner) => ({
+            seat: requireProjectedPlayer(situation, winner.playerId).seat,
+            name: winner.playerName,
+            amount: winner.amount,
+          })),
+        }
+      : {}),
+    ...(situation.gameResult ? { gameOutcome: situation.gameResult } : {}),
+    ...(situation.handResult?.reason === "showdown"
+      ? { revealedHands }
+      : {}),
+  };
+}
+
+function agentSituation(
+  situation: PokerSituation,
+  room: PokerRoomContext | null = null,
+) {
+  validateSafeProjection(situation);
+  const grounded = groundPokerSituation(situation);
+  const hero = requireProjectedPlayer(situation, situation.yourPlayerId);
+
+  const orders = nominalPositionOrders(situation);
+  const currentActor = situation.players.find(
+    (player) => player.id === situation.currentActorId,
+  );
+  const history = agentActionHistory(situation, situation.recentActions);
+  const heroPosition = positionFor(hero, situation, orders);
+
+  return {
+    contractVersion: 3,
+    game: gameIdentity(situation),
     hero: {
-      playerId: hero.id,
-      playerName: hero.displayName,
       seat: hero.seat,
+      name: hero.displayName,
       cards: situation.yourCards,
       stack: hero.stack,
       status: hero.status,
       committedThisStreet: hero.committedThisStreet,
-      position: positionFor(hero, situation, orders),
+      position: heroPosition,
     },
-    positions: {
-      button: button ? playerReference(button) : { seat: situation.dealerSeat },
-      smallBlind: {
-        amount: situation.smallBlind,
-        ...(smallBlind
-          ? playerReference(smallBlind)
-          : { seat: situation.smallBlindSeat }),
+    table: {
+      board: situation.board,
+      pot: {
+        total: situation.pot,
+        layers: situation.pots.map((pot) => potLayer(situation, pot)),
+        ...(situation.unmatchedContribution
+          ? {
+              unmatchedContribution: {
+                seat: requireProjectedPlayer(
+                  situation,
+                  situation.unmatchedContribution.playerId,
+                ).seat,
+                amount: situation.unmatchedContribution.amount,
+              },
+            }
+          : {}),
       },
-      bigBlind: {
-        amount: situation.bigBlind,
-        ...(bigBlind
-          ? playerReference(bigBlind)
-          : { seat: situation.bigBlindSeat }),
+      currentBetToMatch: situation.currentBet,
+      amountToCall: situation.toCall,
+      lastFullRaiseIncrement: situation.lastFullRaiseSize,
+      buttonSeat: situation.dealerSeat,
+      blinds: {
+        small: { seat: situation.smallBlindSeat, amount: situation.smallBlind },
+        big: { seat: situation.bigBlindSeat, amount: situation.bigBlind },
       },
-      nominalPreflopOrder: orders.preflop.map(playerReference),
-      nominalPostflopOrder: orders.postflop.map(playerReference),
-    },
-    nextToAct: currentActor
-      ? {
-          ...playerReference(currentActor),
-          isHero: currentActor.id === hero.id,
-          status: currentActor.status,
-        }
-      : null,
-    potBreakdown: {
-      total: situation.pot,
-      mainPot: situation.pots[0]
-        ? potLayer(situation, situation.pots[0])
-        : null,
-      sidePots: situation.pots
-        .slice(1)
-        .map((pot) => potLayer(situation, pot)),
-      unmatchedContribution: situation.unmatchedContribution
+      nextToAct: currentActor
         ? {
-            amount: situation.unmatchedContribution.amount,
-            player: unmatchedPlayer
-              ? playerReference(unmatchedPlayer)
-              : { playerId: situation.unmatchedContribution.playerId },
+            ...playerReference(currentActor),
+            isHero: currentActor.id === hero.id,
           }
         : null,
     },
-    currentBetToMatch: situation.currentBet,
-    amountToCall: situation.toCall,
-    lastFullRaiseIncrement: situation.lastFullRaiseSize,
-    legalActions: agentLegalActions(situation, hero),
     players: situation.players.map((player) => ({
-      ...player,
-      isHero: player.id === hero.id,
-      position: positionFor(player, situation, orders),
+      seat: player.seat,
+      name: player.displayName,
+      stack: player.stack,
+      status: player.status,
+      committedThisStreet: player.committedThisStreet,
+      position: positionOrderFor(player, situation, orders),
+      ...(player.id === hero.id ? { isHero: true } : {}),
+      ...(player.isBot ? { isBot: true } : {}),
+      ...(player.revealedCards?.length
+        ? { revealedCards: player.revealedCards }
+        : {}),
     })),
-    actionHistory: agentActionHistory(situation.recentActions),
-    terminal: {
-      handComplete: situation.handResult !== null,
-      gameComplete: situation.gameResult !== null,
-      endedBy: situation.handResult?.reason ?? null,
-      handResult: situation.handResult,
-      gameResult: situation.gameResult,
-      showdown:
-        situation.handResult?.reason === "showdown"
-          ? { board: situation.board, revealedHands }
-          : null,
+    legalActions: agentLegalActions(situation, hero),
+    context: {
+      bettingRoundState: grounded.actionContext.bettingRoundState,
+      isFirstVoluntaryAction:
+        grounded.actionContext.isFirstVoluntaryAction,
+      foldedPlayers: grounded.actionContext.foldedPlayers.map((player) => ({
+        seat: requireProjectedPlayer(situation, player.playerId).seat,
+        name: player.playerName,
+        street: player.street,
+      })),
+      summary: conciseSituationSummary(situation, grounded, history),
+      totalActionCount: history.length,
+      eventFields: PUBLIC_EVENT_FIELDS,
+      recentEvents: history.slice(-6).map(eventRow),
     },
+    terminal: agentTerminal(situation),
+    ...(room
+      ? { room: { phase: room.roomPhase, viewerStatus: room.viewerStatus } }
+      : {}),
   };
 }
 
@@ -426,7 +531,7 @@ export function createCurrentSituationTool({
   return {
     name: "get_current_situation",
     description:
-      "Read the authoritative, seat-safe current hand: hero cards, public board, stacks and commitments, positions, pot layers, exact next actor, legal actions, and public history. Forced posts are separate from voluntary actions. amountToCall is chips to add; bet/raise minTotal and maxTotal are final street totals (raise to X). Re-read after the table changes. suggest_action is available only on the hero's turn. Completed hands use street 'showdown' and terminal.endedBy.",
+      "Read the authoritative, seat-safe current hand: hero cards, public board, stacks and commitments, action order, pot layers, exact next actor, legal actions, and public history. recentEvents rows follow context.eventFields. Forced posts are separate from voluntary actions. amountToCall is chips to add; bet/raise minTotal and maxTotal are final street totals (raise to X). Re-read after the table changes. suggest_action is available only on the hero's turn.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -441,24 +546,150 @@ export function createCurrentSituationTool({
       await allowActivityFrame(onActivity);
       try {
         const situation = requireSituation(getSituation);
-        const room = getRoomContext?.();
+        const room = getRoomContext?.() ?? null;
         onActivity?.({ phase: "completed", tool: "get_current_situation" });
-        return JSON.stringify(
-          room ? { ...agentSituation(situation), ...room } : agentSituation(situation),
-        );
+        return JSON.stringify(agentSituation(situation, room));
       } catch (error) {
+        const failure = readFailure(error);
         onActivity?.({
           phase: "rejected",
           tool: "get_current_situation",
-          message:
-            error instanceof Error
-              ? error.message
-              : "The current hand could not be read.",
+          message: failure.message,
         });
-        throw error;
+        return failure.serialized;
       }
     },
   };
+}
+
+const HISTORY_PAGE_LIMIT = 30;
+const HISTORY_OUTPUT_LIMIT = 2_500;
+const SITUATION_SUMMARY_LIMIT = 90;
+
+const PUBLIC_EVENT_FIELDS = [
+  "sequence",
+  "street",
+  "category",
+  "seat",
+  "name",
+  "action",
+  "amountAdded",
+  "finalStreetTotal",
+] as const;
+
+type AgentActionEvent = ReturnType<typeof agentActionHistory>[number];
+
+function eventRow(event: AgentActionEvent) {
+  return PUBLIC_EVENT_FIELDS.map((field) => event[field] ?? null);
+}
+
+function compactSummary(summary: string): string {
+  if (summary.length <= SITUATION_SUMMARY_LIMIT) return summary;
+  return `${summary.slice(0, SITUATION_SUMMARY_LIMIT - 1).trimEnd()}…`;
+}
+
+function conciseSituationSummary(
+  situation: PokerSituation,
+  grounded: ReturnType<typeof groundPokerSituation>,
+  history: readonly AgentActionEvent[],
+): string {
+  const state = grounded.actionContext.bettingRoundState.replaceAll("-", " ");
+  const actor = situation.currentActorId
+    ? requireProjectedPlayer(situation, situation.currentActorId)
+    : null;
+  const actorText = actor
+    ? `${actor.id === situation.yourPlayerId ? "Hero" : actor.displayName} to act.`
+    : situation.handResult
+      ? "Hand complete."
+      : "No next actor.";
+  const recentVoluntary = history
+    .filter((event) => event.category === "voluntary")
+    .slice(-2)
+    .map((event) => {
+      if (event.action === "bet" || event.action === "raise") {
+        return `${event.name} ${event.action === "bet" ? "bet" : "raised"} to ${event.finalStreetTotal}`;
+      }
+      if (event.action === "call") {
+        return `${event.name} called ${event.amountAdded}`;
+      }
+      return `${event.name} ${event.action === "check" ? "checked" : "folded"}`;
+    });
+  const folded = grounded.actionContext.foldedPlayers.length
+    ? `Folded: ${grounded.actionContext.foldedPlayers
+        .map((player) => player.playerName)
+        .join(", ")}.`
+    : "";
+  const summary = [
+    `${state[0]?.toUpperCase() ?? ""}${state.slice(1)} ${situation.street}.`,
+    actorText,
+    recentVoluntary.length ? `${recentVoluntary.join("; ")}.` : "",
+    folded,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return compactSummary(summary);
+}
+
+function historyPageInput(input: Record<string, unknown>) {
+  const requestedLimit = input.limit;
+  const limit = Number.isSafeInteger(requestedLimit)
+    ? Math.min(HISTORY_PAGE_LIMIT, Math.max(1, Number(requestedLimit)))
+    : HISTORY_PAGE_LIMIT;
+  const requestedBefore = input.beforeSequence;
+  const beforeSequence =
+    Number.isSafeInteger(requestedBefore) && Number(requestedBefore) >= 1
+      ? Number(requestedBefore)
+      : null;
+
+  return { limit, beforeSequence };
+}
+
+function agentHandHistory(
+  situation: PokerSituation,
+  history: readonly HandActionEvent[],
+  input: Record<string, unknown>,
+  room: PokerRoomContext | null,
+) {
+  validateSafeProjection(situation, history);
+  const events = agentActionHistory(situation, history);
+  const { limit, beforeSequence } = historyPageInput(input);
+  const eligibleEvents = beforeSequence
+    ? events.filter((event) => event.sequence < beforeSequence)
+    : events;
+  let pageEvents = eligibleEvents.slice(-limit);
+
+  const buildPayload = () => ({
+    contractVersion: 3,
+    game: gameIdentity(situation),
+    board: situation.board,
+    players: situation.players.map(playerReference),
+    eventFields: PUBLIC_EVENT_FIELDS,
+    events: pageEvents.map(eventRow),
+    page: {
+      totalEvents: events.length,
+      returnedEvents: pageEvents.length,
+      hasEarlier: eligibleEvents.length > pageEvents.length,
+      hasLater:
+        beforeSequence !== null &&
+        events.some((event) => event.sequence >= beforeSequence),
+      firstSequence: pageEvents.at(0)?.sequence ?? null,
+      lastSequence: pageEvents.at(-1)?.sequence ?? null,
+    },
+    terminal: agentTerminal(situation),
+    ...(room
+      ? { room: { phase: room.roomPhase, viewerStatus: room.viewerStatus } }
+      : {}),
+  });
+
+  while (
+    pageEvents.length > 1 &&
+    JSON.stringify(buildPayload()).length > HISTORY_OUTPUT_LIMIT
+  ) {
+    pageEvents = pageEvents.slice(1);
+  }
+
+  return buildPayload();
 }
 
 export function createHandHistoryTool({
@@ -470,65 +701,51 @@ export function createHandHistoryTool({
   return {
     name: "get_hand_history",
     description:
-      "Read the complete public chronology and showdown disclosures for the current hand. Forced posts and voluntary actions are separate; calls show chips added and bet/raise amounts are final street totals. A completed hand always reports street 'showdown'; terminal.endedBy says whether it ended by fold or showdown. This is optional for deeper reasoning because get_current_situation contains the immediate legal state.",
+      "Read a size-bounded page of public chronology and showdown disclosures for the current hand. events rows follow eventFields. Forced posts and voluntary actions are separate; calls show chips added and bet/raise amounts are final street totals. Each response returns up to limit events in chronological order. Use beforeSequence while page.hasEarlier is true. This is optional because get_current_situation contains the immediate state.",
     inputSchema: {
       type: "object",
-      properties: {},
+      properties: {
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: HISTORY_PAGE_LIMIT,
+          description:
+            "Events per page from 1 to 30. Defaults to 30 and is clamped to that range.",
+        },
+        beforeSequence: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "For older events, use the firstSequence from the previous page.",
+        },
+      },
       additionalProperties: false,
     },
     annotations: {
       readOnlyHint: true,
       untrustedContentHint: true,
     },
-    execute: async () => {
+    execute: async (input) => {
       onActivity?.({ phase: "started", tool: "get_hand_history" });
       await allowActivityFrame(onActivity);
       try {
         const situation = requireSituation(getSituation);
-        const room = getRoomContext?.();
+        validateSafeProjection(situation);
+        const room = getRoomContext?.() ?? null;
         const history = getHandHistory();
-        const result = JSON.stringify({
-          contractVersion: 2,
-          gameId: situation.gameId,
-          gameVariant: "texas-holdem",
-          bettingStructure: "no-limit",
-          stakes: "play-money",
-          handId: `${situation.gameId}:hand:${situation.handNumber}`,
-          handNumber: situation.handNumber,
-          stateVersion: situation.stateVersion,
-          street: situation.street,
-          board: situation.board,
-          handResult: situation.handResult,
-          revealedHands: situation.players
-            .filter((player) => player.revealedCards?.length)
-            .map((player) => ({
-              playerId: player.id,
-              playerName: player.displayName,
-              cards: player.revealedCards,
-            })),
-          actions: history,
-          actionHistory: agentActionHistory(history),
-          terminal: {
-            handComplete: situation.handResult !== null,
-            gameComplete: situation.gameResult !== null,
-            endedBy: situation.handResult?.reason ?? null,
-            handResult: situation.handResult,
-            gameResult: situation.gameResult,
-          },
-          ...(room ?? {}),
-        });
+        const result = JSON.stringify(
+          agentHandHistory(situation, history, input, room),
+        );
         onActivity?.({ phase: "completed", tool: "get_hand_history" });
         return result;
       } catch (error) {
+        const failure = readFailure(error);
         onActivity?.({
           phase: "rejected",
           tool: "get_hand_history",
-          message:
-            error instanceof Error
-              ? error.message
-              : "The hand history could not be read.",
+          message: failure.message,
         });
-        throw error;
+        return failure.serialized;
       }
     },
   };

@@ -1,5 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 
+function eventObjects(fields: string[], rows: unknown[][]) {
+  return rows.map((row) =>
+    Object.fromEntries(fields.map((field, index) => [field, row[index]])),
+  );
+}
+
 async function installWebMCPStub(page: Page) {
   await page.addInitScript(() => {
     const tools = new Map<string, WebMCPTool>();
@@ -102,14 +108,14 @@ test.describe("in-game activity clarity", () => {
       "suggest_action",
     ]);
     expect(snapshot.current).toMatchObject({
-      contractVersion: 2,
-      handId: "pocket-demo:hand:8",
-      actionHistory: expect.any(Array),
+      contractVersion: 3,
+      game: { handId: "hand:8" },
+      context: { recentEvents: expect.any(Array) },
     });
     expect(snapshot.history).toMatchObject({
-      contractVersion: 2,
-      handId: "pocket-demo:hand:8",
-      actionHistory: expect.any(Array),
+      contractVersion: 3,
+      game: { handId: "hand:8" },
+      events: expect.any(Array),
     });
     expect(snapshot.audit.overlappingRegistrations).toEqual([]);
 
@@ -192,24 +198,35 @@ test.describe("in-game activity clarity", () => {
     ]);
     expect(browserContract.currentDescription).toContain("authoritative");
     expect(browserContract.currentResult).toMatchObject({
-      stateVersion: 17,
-      actionContext: {
+      game: { stateVersion: 17 },
+      context: {
         bettingRoundState: "raised",
         isFirstVoluntaryAction: false,
-        nextToAct: {
-          playerId: "hero",
-          playerName: "Morgan",
-          isYou: true,
-        },
-        voluntaryActionsThisStreet: [
-          { playerName: "Morgan", action: "bet", amount: 12 },
-          { playerName: "Alex", action: "raise", amount: 44 },
-        ],
         foldedPlayers: [],
+        summary: expect.stringContaining("Alex raised to 44"),
       },
-      situationSummary: expect.stringContaining("Alex raised to 44"),
+      table: { nextToAct: { name: "Morgan", isHero: true } },
     });
-    expect(browserContract.currentResult.situationSummary).not.toContain(
+    expect(
+      eventObjects(
+        browserContract.currentResult.context.eventFields,
+        browserContract.currentResult.context.recentEvents,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Morgan",
+          action: "bet",
+          finalStreetTotal: 12,
+        }),
+        expect.objectContaining({
+          name: "Alex",
+          action: "raise",
+          finalStreetTotal: 44,
+        }),
+      ]),
+    );
+    expect(browserContract.currentResult.context.summary).not.toContain(
       "folded",
     );
     expect(browserContract.suggestionDescription).toContain("never plays");

@@ -1,6 +1,12 @@
 import { createClient } from "@supabase/supabase-js";
 import { expect, test, type Page, type Route } from "@playwright/test";
 
+function eventObjects(fields: string[], rows: unknown[][]) {
+  return rows.map((row) =>
+    Object.fromEntries(fields.map((field, index) => [field, row[index]])),
+  );
+}
+
 const anonymousUserByPage = new WeakMap<Page, Promise<string>>();
 
 function testAdminClient() {
@@ -372,18 +378,30 @@ test("an invalid sized WebMCP recommendation returns recovery and a valid retry 
   ]);
   expect(browserContract.currentDescription).toContain("authoritative");
   expect(browserContract.currentResult).toMatchObject({
-    stateVersion: initialSituation.stateVersion,
-    actionContext: {
+    game: { stateVersion: initialSituation.stateVersion },
+    context: {
       bettingRoundState: "bet",
       isFirstVoluntaryAction: false,
       foldedPlayers: [],
-      voluntaryActionsThisStreet: [
-        { playerName: "Alex", action: "bet", amount: 4 },
-      ],
+      summary: expect.stringContaining("Alex bet to 4"),
     },
-    situationSummary: expect.stringContaining("Alex bet to 4"),
+    table: { nextToAct: { name: "Morgan", isHero: true } },
   });
-  expect(browserContract.currentResult.situationSummary).not.toContain(
+  expect(
+    eventObjects(
+      browserContract.currentResult.context.eventFields,
+      browserContract.currentResult.context.recentEvents,
+    ),
+  ).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        name: "Alex",
+        action: "bet",
+        finalStreetTotal: 4,
+      }),
+    ]),
+  );
+  expect(browserContract.currentResult.context.summary).not.toContain(
     "Theo folded",
   );
   expect(browserContract.suggestionDescription).toContain("never plays");

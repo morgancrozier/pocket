@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentSuggestion, PokerSituation } from "@/types/poker";
+import type {
+  AgentSuggestion,
+  HandActionEvent,
+  PokerSituation,
+} from "@/types/poker";
+import { INITIAL_SITUATION } from "@/lib/poker/mock-state";
 import {
   createReadPokerTools,
   createSuggestActionTool,
@@ -83,6 +88,12 @@ function createSituation(
     gameResult: null,
     ...overrides,
   };
+}
+
+function eventObjects(fields: string[], rows: unknown[][]) {
+  return rows.map((row) =>
+    Object.fromEntries(fields.map((field, index) => [field, row[index]])),
+  );
 }
 
 afterEach(() => {
@@ -367,28 +378,185 @@ describe("Poker WebMCP definitions", () => {
     ];
 
     expect(JSON.parse(await situationTool.execute({}))).toMatchObject({
-      stateVersion: 5,
-      pot: 148,
-      actionContext: expect.any(Object),
-      situationSummary: expect.any(String),
+      contractVersion: 3,
+      game: { stateVersion: 5 },
+      table: { pot: { total: 148 } },
+      context: { summary: expect.any(String) },
     });
-    expect(JSON.parse(await historyTool.execute({}))).toMatchObject({
-      stateVersion: 5,
+    const historyResult = JSON.parse(await historyTool.execute({}));
+    expect(historyResult).toMatchObject({
+      contractVersion: 3,
+      game: { stateVersion: 5 },
       board: ["Ah", "9s", "4c", "7d", "2h"],
-      handResult: situation.handResult,
-      revealedHands: [
-        {
-          playerId: "bot-1",
-          playerName: "June",
-          cards: ["Kh", "Kd"],
-        },
-      ],
-      actions: history,
+      terminal: {
+        endedBy: "showdown",
+        revealedHands: [{ seat: 1, name: "June", cards: ["Kh", "Kd"] }],
+      },
+    });
+    expect(eventObjects(historyResult.eventFields, historyResult.events)).toMatchObject([
+      { sequence: 1, seat: 1, name: "June", action: "raise" },
+      { sequence: 2, seat: 0, name: "Morgan", action: "call" },
+    ]);
+
+    situation = null;
+    expect(JSON.parse(await situationTool.execute({}))).toEqual({
+      ok: false,
+      error: {
+        code: "NO_SITUATION",
+        message: "No player-safe poker situation is currently available.",
+        recovery: "Wait for Pocket to finish loading, then call the read tool again.",
+      },
+    });
+  });
+
+  it("returns compact contract-v3 reads without legacy aliases", async () => {
+    const situation = INITIAL_SITUATION;
+    const [situationTool, historyTool] = createReadPokerTools({
+      getSituation: () => situation,
+      getHandHistory: () => situation.recentActions,
+    });
+    const currentRaw = await situationTool.execute({});
+    const historyRaw = await historyTool.execute({});
+    const current = JSON.parse(currentRaw) as Record<string, unknown>;
+    const history = JSON.parse(historyRaw) as Record<string, unknown>;
+
+    expect(Object.keys(current).sort()).toEqual([
+      "context",
+      "contractVersion",
+      "game",
+      "hero",
+      "legalActions",
+      "players",
+      "table",
+      "terminal",
+    ]);
+    expect(Object.keys(history).sort()).toEqual([
+      "board",
+      "contractVersion",
+      "eventFields",
+      "events",
+      "game",
+      "page",
+      "players",
+      "terminal",
+    ]);
+    for (const legacyKey of [
+      "yourCards",
+      "yourStack",
+      "pot",
+      "currentBet",
+      "toCall",
+      "recentActions",
+      "actionHistory",
+      "actions",
+      "handResult",
+      "gameResult",
+    ]) {
+      expect(current).not.toHaveProperty(legacyKey);
+      expect(history).not.toHaveProperty(legacyKey);
+    }
+    expect(currentRaw.length).toBeLessThanOrEqual(2_000);
+    expect(historyRaw.length).toBeLessThanOrEqual(1_500);
+  });
+
+  it("bounds and paginates a 64-event hand history", async () => {
+    const history: HandActionEvent[] = Array.from({ length: 64 }, (_, index) => ({
+      sequence: index + 1,
+      street: index < 16 ? "preflop" : index < 32 ? "flop" : index < 48 ? "turn" : "river",
+      playerId: index % 2 === 0 ? "hero" : "bot-1",
+      playerName: index % 2 === 0 ? "Morgan" : "June",
+      action: "check",
+    }));
+    const situation = createSituation({ recentActions: history });
+    const [, historyTool] = createReadPokerTools({
+      getSituation: () => situation,
+      getHandHistory: () => history,
+    });
+    const firstRaw = await historyTool.execute({ limit: 30 });
+    const first = JSON.parse(firstRaw);
+    const completeRows = history.map((event, index) => [
+      event.sequence,
+      event.street,
+      "voluntary",
+      index % 2 === 0 ? 0 : 1,
+      event.playerName,
+      event.action,
+      null,
+      null,
+    ]);
+    const hypotheticalCompleteRaw = JSON.stringify({
+      ...first,
+      events: completeRows,
+      page: {
+        totalEvents: 64,
+        returnedEvents: 64,
+        hasEarlier: false,
+        hasLater: false,
+        firstSequence: 1,
+        lastSequence: 64,
+      },
+    });
+
+    expect(hypotheticalCompleteRaw.length).toBeGreaterThan(2_500);
+    expect(firstRaw.length).toBeLessThanOrEqual(2_500);
+    expect(first.page).toMatchObject({
+      totalEvents: 64,
+      hasEarlier: true,
+      hasLater: false,
+      lastSequence: 64,
+    });
+    expect(first.page.returnedEvents).toBeLessThanOrEqual(30);
+    expect(first.events).toHaveLength(first.page.returnedEvents);
+
+    const olderRaw = await historyTool.execute({
+      limit: 30,
+      beforeSequence: first.page.firstSequence,
+    });
+    const older = JSON.parse(olderRaw);
+    expect(olderRaw.length).toBeLessThanOrEqual(2_500);
+    expect(older.page.hasLater).toBe(true);
+    expect(older.page.lastSequence).toBeLessThan(first.page.firstSequence);
+  });
+
+  it("returns structured read failures without leaking internal errors", async () => {
+    let situation: PokerSituation | null = createSituation();
+    const onActivity = vi.fn();
+    const [situationTool, historyTool] = createReadPokerTools({
+      getSituation: () => situation,
+      getHandHistory: () => {
+        throw new Error("database password and internal stack");
+      },
+      onActivity,
     });
 
     situation = null;
-    await expect(situationTool.execute({})).rejects.toThrow(
-      "No player-safe poker situation",
+    expect(JSON.parse(await situationTool.execute({}))).toMatchObject({
+      ok: false,
+      error: { code: "NO_SITUATION", recovery: expect.any(String) },
+    });
+
+    situation = createSituation({ yourPlayerId: "missing-hero" });
+    expect(JSON.parse(await situationTool.execute({}))).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_SAFE_PROJECTION", recovery: expect.any(String) },
+    });
+    expect(JSON.parse(await historyTool.execute({}))).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_SAFE_PROJECTION", recovery: expect.any(String) },
+    });
+
+    situation = createSituation();
+    const unavailableRaw = await historyTool.execute({});
+    expect(unavailableRaw).not.toContain("database password");
+    expect(JSON.parse(unavailableRaw)).toMatchObject({
+      ok: false,
+      error: { code: "READ_UNAVAILABLE", recovery: expect.any(String) },
+    });
+    expect(onActivity.mock.calls.map(([event]) => event)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ phase: "rejected", tool: "get_current_situation" }),
+        expect.objectContaining({ phase: "rejected", tool: "get_hand_history" }),
+      ]),
     );
   });
 
@@ -494,17 +662,18 @@ describe("Poker WebMCP definitions", () => {
     });
 
     expect(JSON.parse(await situationTool.execute({}))).toMatchObject({
-      roomPhase: "active",
-      viewerStatus: "eliminated",
-      yourCards: [],
+      room: { phase: "active", viewerStatus: "eliminated" },
+      hero: { cards: [] },
       legalActions: [],
-      isYourTurn: false,
+      table: { nextToAct: { isHero: false } },
     });
-    expect(JSON.parse(await historyTool.execute({}))).toMatchObject({
-      roomPhase: "active",
-      viewerStatus: "eliminated",
-      actions: situation.recentActions,
+    const historyResult = JSON.parse(await historyTool.execute({}));
+    expect(historyResult).toMatchObject({
+      room: { phase: "active", viewerStatus: "eliminated" },
     });
+    expect(eventObjects(historyResult.eventFields, historyResult.events)).toMatchObject([
+      { sequence: 1, seat: 1, name: "June", action: "raise" },
+    ]);
     expect([situationTool.name, historyTool.name]).toEqual([
       "get_current_situation",
       "get_hand_history",
@@ -524,7 +693,7 @@ describe("tool activity frames", () => {
     });
 
     expect(JSON.parse(await situationTool.execute({}))).toMatchObject({
-      stateVersion: 4,
+      game: { stateVersion: 4 },
     });
   });
 

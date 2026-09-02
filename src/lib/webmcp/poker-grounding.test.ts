@@ -6,7 +6,6 @@ import {
   type AuthoritativePokerState,
   type DemoPlayerDefinition,
 } from "@/lib/poker/engine-adapter";
-import type { GroundedPokerSituation } from "@/lib/poker/action-context";
 import type { PokerActionIntent } from "@/types/poker";
 import { createCurrentSituationTool } from "./poker-tools";
 
@@ -69,10 +68,29 @@ function actBeforeHero(intent: PokerActionIntent): AuthoritativePokerState {
 async function readCurrentSituation(
   state: AuthoritativePokerState,
   viewerId = "hero",
-): Promise<GroundedPokerSituation> {
+) {
   const situation = projectAuthoritativeGame(state, viewerId);
   const tool = createCurrentSituationTool({ getSituation: () => situation });
-  return JSON.parse(await tool.execute({})) as GroundedPokerSituation;
+  const result = JSON.parse(await tool.execute({})) as {
+    context: {
+      bettingRoundState: string;
+      isFirstVoluntaryAction: boolean;
+      foldedPlayers: Array<{ seat: number; name: string; street: string }>;
+      eventFields: string[];
+      recentEvents: unknown[][];
+      summary: string;
+    };
+  };
+  const recentEvents = result.context.recentEvents.map((row) =>
+    Object.fromEntries(
+      result.context.eventFields.map((field, index) => [field, row[index]]),
+    ),
+  );
+
+  return {
+    ...result,
+    context: { ...result.context, recentEvents },
+  };
 }
 
 describe("authoritative WebMCP action grounding", () => {
@@ -81,20 +99,13 @@ describe("authoritative WebMCP action grounding", () => {
       createGame(FIRST_TO_ACT_PLAYERS),
     );
 
-    expect(situation.actionContext).toEqual({
+    expect(situation.context).toMatchObject({
       bettingRoundState: "unopened",
       isFirstVoluntaryAction: true,
-      nextToAct: {
-        playerId: "hero",
-        playerName: "Morgan",
-        isYou: true,
-      },
-      voluntaryActionsThisStreet: [],
       foldedPlayers: [],
     });
-    expect(situation.situationSummary).toBe(
-      "Unopened preflop betting round. You are first to act voluntarily. No player has folded, called, bet, or raised. June posted the small blind of 1 and Theo posted the big blind of 2.",
-    );
+    expect(situation.context.summary).toMatch(/^Unopened preflop\. Hero to act\./);
+    expect(situation.context.summary.length).toBeLessThanOrEqual(90);
   });
 
   it("derives folded players only from actual fold events", async () => {
@@ -102,26 +113,24 @@ describe("authoritative WebMCP action grounding", () => {
       actBeforeHero({ action: "fold" }),
     );
 
-    expect(situation.actionContext).toMatchObject({
+    expect(situation.context).toMatchObject({
       bettingRoundState: "folds-only",
       isFirstVoluntaryAction: false,
       foldedPlayers: [
         {
-          playerId: "bot-west",
-          playerName: "Theo",
+          seat: 3,
+          name: "Theo",
           street: "preflop",
         },
       ],
-      voluntaryActionsThisStreet: [
-        {
-          playerId: "bot-west",
-          playerName: "Theo",
-          action: "fold",
-        },
-      ],
     });
-    expect(situation.situationSummary).toContain("Theo folded.");
-    expect(situation.situationSummary).not.toContain("Unopened");
+    expect(situation.context.recentEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ seat: 3, name: "Theo", action: "fold" }),
+      ]),
+    );
+    expect(situation.context.summary).toContain("Theo folded.");
+    expect(situation.context.summary).not.toContain("Unopened");
   });
 
   it("describes a call before hero as limped rather than unopened", async () => {
@@ -129,13 +138,15 @@ describe("authoritative WebMCP action grounding", () => {
       actBeforeHero({ action: "call" }),
     );
 
-    expect(situation.actionContext.bettingRoundState).toBe("limped");
-    expect(situation.actionContext.isFirstVoluntaryAction).toBe(false);
-    expect(situation.actionContext.voluntaryActionsThisStreet).toMatchObject([
-      { playerName: "Theo", action: "call", amount: 2 },
-    ]);
-    expect(situation.situationSummary).toContain("Limped preflop");
-    expect(situation.situationSummary).not.toContain("Unopened");
+    expect(situation.context.bettingRoundState).toBe("limped");
+    expect(situation.context.isFirstVoluntaryAction).toBe(false);
+    expect(situation.context.recentEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "Theo", action: "call" }),
+      ]),
+    );
+    expect(situation.context.summary).toContain("Limped preflop");
+    expect(situation.context.summary).not.toContain("Unopened");
   });
 
   it("describes a raise before hero with its final street total", async () => {
@@ -143,11 +154,17 @@ describe("authoritative WebMCP action grounding", () => {
       actBeforeHero({ action: "raise", amount: 4 }),
     );
 
-    expect(situation.actionContext.bettingRoundState).toBe("raised");
-    expect(situation.actionContext.voluntaryActionsThisStreet).toMatchObject([
-      { playerName: "Theo", action: "raise", amount: 4 },
-    ]);
-    expect(situation.situationSummary).toContain("raised to 4");
-    expect(situation.situationSummary).not.toContain("Unopened");
+    expect(situation.context.bettingRoundState).toBe("raised");
+    expect(situation.context.recentEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Theo",
+          action: "raise",
+          finalStreetTotal: 4,
+        }),
+      ]),
+    );
+    expect(situation.context.summary).toContain("raised to 4");
+    expect(situation.context.summary).not.toContain("Unopened");
   });
 });
