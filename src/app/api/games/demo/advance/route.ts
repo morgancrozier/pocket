@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
       authenticatedUserId,
       parseDemoGameMode(request.nextUrl.searchParams.get("demo")),
       parseJudgeDemoRun(request.nextUrl.searchParams.get("run")),
-    ).advanceBots({
+    ).advanceBot({
       actorId: DEMO_HERO_ID,
       expectedStateVersion: parsed.data.expectedStateVersion,
     });

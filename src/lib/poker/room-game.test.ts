@@ -56,12 +56,42 @@ async function startedRoom(seed = 11) {
   return { repository, service, roomCode: waiting.roomCode, started };
 }
 
+async function advanceToHumanOrSettlement(
+  started: Awaited<ReturnType<typeof startedRoom>>,
+): Promise<{ creator: PlayingRoomSnapshot; guest: PlayingRoomSnapshot }> {
+  let creator = playing(
+    await started.service.get(started.roomCode, "creator-user"),
+  );
+  for (let guard = 0; !creator.situation.handResult; guard += 1) {
+    if (guard >= 100) throw new Error("Bot actions did not reach a human.");
+    const actor = creator.situation.players.find(
+      (player) => player.id === creator.situation.currentActorId,
+    );
+    if (!actor?.isBot) break;
+    creator = playing(
+      (
+        await started.service.advance(
+          started.roomCode,
+          "creator-user",
+          creator.revision,
+        )
+      ).room,
+    );
+  }
+  return {
+    creator,
+    guest: playing(
+      await started.service.get(started.roomCode, "guest-user"),
+    ),
+  };
+}
+
 async function completeRoom(seed: number) {
   const started = await startedRoom(seed);
   let room = playing(await started.service.get(started.roomCode, "creator-user"));
   let spectatorObserved = false;
 
-  for (let guard = 0; room.phase !== "complete" && guard < 300; guard += 1) {
+  for (let guard = 0; room.phase !== "complete" && guard < 800; guard += 1) {
     const creator = playing(
       await started.service.get(started.roomCode, "creator-user"),
     );
@@ -83,6 +113,21 @@ async function completeRoom(seed: number) {
     }
 
     const actorId = creator.situation.currentActorId;
+    const actor = creator.situation.players.find(
+      (player) => player.id === actorId,
+    );
+    if (actor?.isBot) {
+      room = playing(
+        (
+          await started.service.advance(
+            started.roomCode,
+            "creator-user",
+            creator.revision,
+          )
+        ).room,
+      );
+      continue;
+    }
     const actorUser =
       actorId === creator.viewer.playerId ? "creator-user" : "guest-user";
     const actorView = actorUser === "creator-user" ? creator : guest;
@@ -182,10 +227,15 @@ describe("Gate 3 multiplayer room", () => {
     ).toMatchObject({ reason: { code: "ROOM_FULL" } });
   });
 
-  it("projects two private seats from one state and stops bots at a human", async () => {
-    const { service, roomCode } = await startedRoom(19);
-    const creator = playing(await service.get(roomCode, "creator-user"));
-    const guest = playing(await service.get(roomCode, "guest-user"));
+  it("projects each committed bot step to both private seats and stops at a human", async () => {
+    const started = await startedRoom(19);
+    const opening = playing(
+      await started.service.get(started.roomCode, "creator-user"),
+    );
+    const openingActor = opening.situation.players.find(
+      (player) => player.id === opening.situation.currentActorId,
+    );
+    const { creator, guest } = await advanceToHumanOrSettlement(started);
 
     expect(creator.revision).toBe(guest.revision);
     expect(creator.situation.board).toEqual(guest.situation.board);
@@ -195,30 +245,35 @@ describe("Gate 3 multiplayer room", () => {
     expect(guest.situation.yourCards).toHaveLength(2);
     expect(creator.situation.yourCards).not.toEqual(guest.situation.yourCards);
 
+    if (openingActor?.isBot) {
+      expect(creator.revision).toBeGreaterThan(opening.revision);
+      expect(creator.situation.recentActions.length).toBeGreaterThan(
+        opening.situation.recentActions.length,
+      );
+    }
+
     const actor = creator.situation.currentActorId;
     expect([creator.viewer.playerId, guest.viewer.playerId]).toContain(actor);
     const actorUser = actor === creator.viewer.playerId ? "creator-user" : "guest-user";
     const actorView = actorUser === "creator-user" ? creator : guest;
-    const result = await service.act({
-      roomCode,
+    const result = await started.service.act({
+      roomCode: started.roomCode,
       userId: actorUser,
       actionId: "00000000-0000-4000-8000-000000009999",
       expectedRevision: actorView.revision,
       intent: passiveIntent(actorView.situation),
     });
     const next = playing(result.room);
-    expect(
-      next.situation.currentActorId === null ||
-        [creator.viewer.playerId, guest.viewer.playerId].includes(
-          next.situation.currentActorId,
-        ),
-    ).toBe(true);
+    expect(next.revision).toBe(creator.revision + 1);
+    expect(next.situation.recentActions).toHaveLength(
+      creator.situation.recentActions.length + 1,
+    );
   });
 
   it("replays an action id exactly once and rejects mismatched reuse", async () => {
-    const { repository, service, roomCode } = await startedRoom(29);
-    const creator = playing(await service.get(roomCode, "creator-user"));
-    const guest = playing(await service.get(roomCode, "guest-user"));
+    const started = await startedRoom(29);
+    const { repository, service, roomCode } = started;
+    const { creator, guest } = await advanceToHumanOrSettlement(started);
     const actorUser =
       creator.situation.currentActorId === creator.viewer.playerId
         ? "creator-user"

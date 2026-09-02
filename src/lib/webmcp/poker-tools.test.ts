@@ -101,6 +101,42 @@ afterEach(() => {
 });
 
 describe("createStageRecommendationTool", () => {
+  it("stays registered while the current situation becomes available or unavailable", async () => {
+    let situation: PokerSituation | null = null;
+    const onSuggestion = vi.fn();
+    const tool = createStageRecommendationTool({
+      getSituation: () => situation,
+      onSuggestion,
+    });
+
+    expect(
+      JSON.parse(
+        await tool.execute({ action: "call", stateVersion: 4 }),
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "NO_SITUATION" },
+    });
+
+    situation = createSituation();
+    expect(
+      JSON.parse(
+        await tool.execute({ action: "call", stateVersion: 4 }),
+      ),
+    ).toMatchObject({ ok: true });
+
+    situation = null;
+    expect(
+      JSON.parse(
+        await tool.execute({ action: "call", stateVersion: 4 }),
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "NO_SITUATION" },
+    });
+    expect(onSuggestion).toHaveBeenCalledOnce();
+  });
+
   it("places a version-bound recommendation without changing game state or calling an action path", async () => {
     let situation = createSituation();
     const serializedBefore = JSON.stringify(situation);
@@ -285,6 +321,29 @@ describe("createStageRecommendationTool", () => {
     ).toMatchObject({
       ok: false,
       error: { code: "NOT_YOUR_TURN" },
+    });
+    expect(onSuggestion).not.toHaveBeenCalled();
+  });
+
+  it("rejects a recommendation while the table is processing an action", async () => {
+    const situation = createSituation();
+    const onSuggestion = vi.fn();
+    let interactionLocked = false;
+    const tool = createStageRecommendationTool({
+      getSituation: () => situation,
+      onSuggestion,
+      isInteractionLocked: () => interactionLocked,
+    });
+
+    interactionLocked = true;
+
+    expect(
+      JSON.parse(
+        await tool.execute({ action: "call", stateVersion: 4 }),
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "STALE_STATE" },
     });
     expect(onSuggestion).not.toHaveBeenCalled();
   });

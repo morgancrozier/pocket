@@ -17,6 +17,8 @@ import {
   createDecisionPresentation,
   describeAction,
 } from "@/lib/poker/decision-presentation";
+import { describeTransitionFrame } from "@/lib/poker/transition-playback";
+import { useBotPacing } from "@/lib/poker/use-bot-pacing";
 import {
   createRecommendationReceipt,
   isRecommendationReceiptCurrent,
@@ -228,6 +230,56 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
     }
   }, [applyRoom, roomCode]);
 
+  const advanceRoomBot = useCallback(
+    async (starting: PlayingRoomSnapshot["situation"], signal: AbortSignal) => {
+      const payload = await requestJson(`/api/rooms/${roomCode}/advance`, {
+        method: "POST",
+        signal,
+        body: JSON.stringify({ expectedRevision: starting.stateVersion }),
+      });
+      if (signal.aborted) return;
+      if (!isOperationResult(payload) || payload.room.phase === "waiting") {
+        throw new Error("Pocket returned an invalid bot action result.");
+      }
+      applyRoom(payload.room);
+      setMessage(describeTransitionFrame(starting, payload.room.situation));
+    },
+    [applyRoom, roomCode],
+  );
+
+  const handleBotAdvanceError = useCallback(
+    async (cause: unknown) => {
+      if (
+        cause instanceof RoomRequestError &&
+        ["ACTION_IN_PROGRESS", "IDEMPOTENCY_KEY_REUSED", "STALE_STATE"].includes(
+          cause.code ?? "",
+        )
+      ) {
+        await refreshRoom();
+        return;
+      }
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Pocket could not advance the bot action.",
+      );
+      await refreshRoom();
+    },
+    [refreshRoom],
+  );
+
+  const {
+    currentBot,
+    isBotTurn,
+    skipToHuman,
+    cancelPacing,
+  } = useBotPacing({
+    situation,
+    enabled: room?.phase === "active" && !submitting,
+    advance: advanceRoomBot,
+    onError: handleBotAdvanceError,
+  });
+
   useEffect(() => {
     void refreshRoom();
   }, [refreshRoom]);
@@ -363,9 +415,11 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
     situation,
     handHistory: situation?.recentActions ?? [],
     onSuggestion: handleSuggestion,
+    registrationEnabled:
+      room?.phase === "active" || room?.phase === "complete",
     roomPhase: room?.phase,
     viewerStatus: room?.viewer.status,
-    observedRevision: highestObservedRevision,
+    interactionLocked: submitting || isBotTurn,
     isRevisionCurrent: () =>
       highestObservedRevisionRef.current <= (roomRef.current?.revision ?? 0),
   });
@@ -580,7 +634,12 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
         setMessage(
           next?.handResult
             ? "The hand settled. The next hand will deal shortly."
-            : "Action accepted. The table advanced to the next human.",
+            : next?.players.some(
+                  (player) =>
+                    player.id === next.currentActorId && player.isBot,
+                )
+              ? "Action accepted. The bots are following in order…"
+              : "Action accepted.",
         );
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : "The action was not accepted.");
@@ -651,6 +710,7 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
   async function restartRoom() {
     if (!room || room.phase !== "complete" || !room.viewer.isOwner) return;
     setSubmitting(true);
+    cancelPacing();
     clearSuggestion();
     try {
       const payload = await requestJson(`/api/rooms/${roomCode}/restart`, {
@@ -825,7 +885,9 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
       ? visibleReceipt.outcome === "followed"
         ? "Recommendation followed"
         : "Recommendation overridden"
-      : supportState === "available"
+      : isBotTurn
+        ? "Following table action"
+        : supportState === "available"
           ? "Waiting for your turn"
           : supportState === "unavailable"
             ? "Copilot unavailable"
@@ -863,6 +925,18 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
                 ? { label: "Play again", onClick: () => void restartRoom() }
                 : null
             }
+            playback={
+              isBotTurn && !isSpectating
+                ? {
+                    status:
+                      message ||
+                      (currentBot
+                        ? `${currentBot.displayName} is considering the next action…`
+                        : "Following the table action…"),
+                    onSkip: skipToHuman,
+                  }
+                : null
+            }
             onBetDraftChange={(value) => {
               setBetDraft(value);
               setBetError(null);
@@ -890,8 +964,9 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
             supportState={supportState}
             activity={activity}
             registrationError={registrationError}
-            isSubmitting={submitting}
+            isSubmitting={submitting || isBotTurn}
             isSpectating={isSpectating}
+            isPlayingTransition={isBotTurn}
             onDismiss={() => {
               clearSuggestion();
               setMessage("Suggestion dismissed. Choose any legal action.");

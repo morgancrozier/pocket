@@ -307,33 +307,32 @@ function projectRoom(room: StoredRoom, userId: string): RoomSnapshot {
   };
 }
 
-function runBotsUntilHumanOrSettlement(
-  initial: AuthoritativePokerState,
+function advanceOneBot(
+  state: AuthoritativePokerState,
   room: StoredRoom,
   chooseBotIntent: (decision: ServerPokerDecision) => PokerActionIntent,
 ): AuthoritativePokerState {
-  let state = initial;
   const players = new Map(
     room.players.map((player) => [player.enginePlayerId, player] as const),
   );
-
-  for (let guard = 0; guard < 100; guard += 1) {
-    const decision = getCurrentDecision(state);
-    if (!decision.actorId) return state;
-    const actor = players.get(decision.actorId);
-    if (!actor) {
-      throw new RoomGameError("INVALID_STATE", "The current actor is not seated.");
-    }
-    if (!actor.isBot) return state;
-    state = applyAuthoritativeAction(
-      state,
-      actor.enginePlayerId,
-      chooseBotIntent(decision),
+  const decision = getCurrentDecision(state);
+  if (!decision.actorId) {
+    throw new RoomGameError("INVALID_STATE", "The current hand is settled.");
+  }
+  const actor = players.get(decision.actorId);
+  if (!actor) {
+    throw new RoomGameError("INVALID_STATE", "The current actor is not seated.");
+  }
+  if (!actor.isBot) {
+    throw new RoomGameError(
+      "OUT_OF_TURN",
+      "The table is waiting for a human player.",
     );
   }
-  throw new RoomGameError(
-    "INVALID_STATE",
-    "The bot loop did not reach a human or settlement.",
+  return applyAuthoritativeAction(
+    state,
+    actor.enginePlayerId,
+    chooseBotIntent(decision),
   );
 }
 
@@ -522,16 +521,12 @@ export function createRoomGame(options: CreateRoomGameOptions): RoomGameService 
               "The room roster is already locked.",
             );
           }
-          const state = runBotsUntilHumanOrSettlement(
-            createAuthoritativeGame({
-              gameId: room.gameId,
-              players: playerDefinitions(room),
-              deterministicSeed: options.deterministicSeed,
-              versionOffset: room.revision,
-            }),
-            room,
-            chooseBotIntent,
-          );
+          const state = createAuthoritativeGame({
+            gameId: room.gameId,
+            players: playerDefinitions(room),
+            deterministicSeed: options.deterministicSeed,
+            versionOffset: room.revision,
+          });
           return { state, status: "active" };
         },
       });
@@ -564,10 +559,10 @@ export function createRoomGame(options: CreateRoomGameOptions): RoomGameService 
               "Only the current human can submit this action.",
             );
           }
-          const next = runBotsUntilHumanOrSettlement(
-            applyAuthoritativeAction(state, member.enginePlayerId, intent),
-            room,
-            chooseBotIntent,
+          const next = applyAuthoritativeAction(
+            state,
+            member.enginePlayerId,
+            intent,
           );
           return { state: next, status: roomCompletion(next, room).status };
         },
@@ -596,28 +591,22 @@ export function createRoomGame(options: CreateRoomGameOptions): RoomGameService 
           }
           const state = restoreAuthoritativeGame(room.engineState);
           const before = getAuthoritativeTableSummary(state);
-          if (!before.handSettled) {
-            throw new RoomGameError(
-              "INVALID_STATE",
-              "The current hand has not settled.",
-            );
+          let advanced: AuthoritativePokerState;
+          if (before.handSettled) {
+            if (roomCompletion(state, room).status === "complete") {
+              throw new RoomGameError("ROOM_COMPLETE", "The room is complete.");
+            }
+            const nextHandNumber = before.handNumber + 1;
+            advanced = startNextAuthoritativeHand(state, {
+              deterministicSeed:
+                typeof options.deterministicSeed === "number"
+                  ? options.deterministicSeed + before.handNumber
+                  : undefined,
+              ...blindLevelForHand(nextHandNumber),
+            });
+          } else {
+            advanced = advanceOneBot(state, room, chooseBotIntent);
           }
-          if (roomCompletion(state, room).status === "complete") {
-            throw new RoomGameError("ROOM_COMPLETE", "The room is complete.");
-          }
-          const nextHandNumber = before.handNumber + 1;
-          const next = startNextAuthoritativeHand(state, {
-            deterministicSeed:
-              typeof options.deterministicSeed === "number"
-                ? options.deterministicSeed + before.handNumber
-                : undefined,
-            ...blindLevelForHand(nextHandNumber),
-          });
-          const advanced = runBotsUntilHumanOrSettlement(
-            next,
-            room,
-            chooseBotIntent,
-          );
           return {
             state: advanced,
             status: roomCompletion(advanced, room).status,
@@ -654,11 +643,7 @@ export function createRoomGame(options: CreateRoomGameOptions): RoomGameService 
             options.deterministicSeed,
           );
           return {
-            state: runBotsUntilHumanOrSettlement(
-              restarted,
-              room,
-              chooseBotIntent,
-            ),
+            state: restarted,
             status: "active",
           };
         },

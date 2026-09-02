@@ -8,6 +8,18 @@ async function installWebMCPStub(context: BrowserContext) {
       string,
       { name: string; execute: (input: object) => unknown }
     >();
+    const audit = {
+      registrations: {} as Record<string, number>,
+      aborts: {} as Record<string, number>,
+      identities: {} as Record<string, number>,
+      toolChanges: 0,
+    };
+    const toolIds = new WeakMap<object, number>();
+    let nextToolId = 1;
+    Object.defineProperty(window, "__pocketWebMCPAudit", {
+      configurable: true,
+      value: audit,
+    });
     Object.defineProperty(document, "modelContext", {
       configurable: true,
       value: {
@@ -15,11 +27,21 @@ async function installWebMCPStub(context: BrowserContext) {
           tool: { name: string; execute: (input: object) => unknown },
           options?: { signal?: AbortSignal },
         ) {
+          const toolId = toolIds.get(tool) ?? nextToolId++;
+          toolIds.set(tool, toolId);
+          audit.identities[tool.name] = toolId;
+          audit.registrations[tool.name] =
+            (audit.registrations[tool.name] ?? 0) + 1;
           tools.set(tool.name, tool);
+          audit.toolChanges += 1;
           options?.signal?.addEventListener(
             "abort",
             () => {
-              if (tools.get(tool.name) === tool) tools.delete(tool.name);
+              audit.aborts[tool.name] = (audit.aborts[tool.name] ?? 0) + 1;
+              if (tools.get(tool.name) === tool) {
+                tools.delete(tool.name);
+                audit.toolChanges += 1;
+              }
             },
             { once: true },
           );
@@ -76,6 +98,22 @@ async function toolNames(page: Page): Promise<string[]> {
   );
 }
 
+async function webMCPAudit(page: Page) {
+  return page.evaluate(
+    () =>
+      (
+        window as typeof window & {
+          __pocketWebMCPAudit: {
+            registrations: Record<string, number>;
+            aborts: Record<string, number>;
+            identities: Record<string, number>;
+            toolChanges: number;
+          };
+        }
+      ).__pocketWebMCPAudit,
+  );
+}
+
 async function executeTool(
   page: Page,
   name: string,
@@ -96,6 +134,32 @@ async function executeTool(
 
 function playing(room: RoomSnapshot): PlayingRoomSnapshot {
   if (room.phase === "waiting") throw new Error("Expected a playing room.");
+  return room;
+}
+
+function botIsActing(room: PlayingRoomSnapshot): boolean {
+  return Boolean(
+    room.situation.players.find(
+      (player) =>
+        player.id === room.situation.currentActorId && player.isBot,
+    ),
+  );
+}
+
+async function advanceBotsToHuman(
+  page: Page,
+  roomCode: string,
+  initial: PlayingRoomSnapshot,
+): Promise<PlayingRoomSnapshot> {
+  let room = initial;
+  for (let guard = 0; botIsActing(room); guard += 1) {
+    if (guard >= 100) throw new Error("Bot actions did not reach a human.");
+    const advanced = await mutate(page, roomCode, "advance", {
+      expectedRevision: room.revision,
+    });
+    expect([200, 409]).toContain(advanced.status);
+    room = playing(await getRoom(page, roomCode));
+  }
   return room;
 }
 
@@ -228,7 +292,8 @@ test("real two-browser room remains seat-safe through spectating and restart", a
       timeout: 15_000,
     });
     expect(delayedCommittedStart).toBe(true);
-    const owner = playing(await getRoom(pageA, roomCode));
+    let owner = playing(await getRoom(pageA, roomCode));
+    owner = await advanceBotsToHuman(pageA, roomCode, owner);
     await waitForRevision(pageB, roomCode, owner.revision);
     const guest = playing(await getRoom(pageB, roomCode));
     expect(owner.revision).toBe(guest.revision);
@@ -245,10 +310,20 @@ test("real two-browser room remains seat-safe through spectating and restart", a
 
     await expect
       .poll(() => toolNames(pageA))
-      .toContain("get_current_situation");
+      .toEqual([
+        "get_current_situation",
+        "get_hand_history",
+        "stage_recommendation",
+      ]);
     await expect
       .poll(() => toolNames(pageB))
-      .toContain("get_current_situation");
+      .toEqual([
+        "get_current_situation",
+        "get_hand_history",
+        "stage_recommendation",
+      ]);
+    const initialOwnerTools = await webMCPAudit(pageA);
+    const initialGuestTools = await webMCPAudit(pageB);
     const ownerToolView = (await executeTool(
       pageA,
       "get_current_situation",
@@ -276,6 +351,22 @@ test("real two-browser room remains seat-safe through spectating and restart", a
       owner.situation.currentActorId === owner.viewer.playerId ? pageA : pageB;
     const observingPage = actingPage === pageA ? pageB : pageA;
     const actingRoom = actingPage === pageA ? owner : guest;
+    const observingToolView = (await executeTool(
+      observingPage,
+      "get_current_situation",
+    )) as { game: { stateVersion: number } };
+    const opponentRecommendation = (await executeTool(
+      observingPage,
+      "stage_recommendation",
+      {
+        action: "check",
+        stateVersion: observingToolView.game.stateVersion,
+      },
+    )) as { ok: boolean; error?: { code?: string } };
+    expect(opponentRecommendation).toMatchObject({
+      ok: false,
+      error: { code: "NOT_YOUR_TURN" },
+    });
     const maximum = actingRoom.situation.legalActions.find(
       (action) => action.type === "bet" || action.type === "raise",
     );
@@ -305,7 +396,19 @@ test("real two-browser room remains seat-safe through spectating and restart", a
     await expect
       .poll(async () => (await getRoom(actingPage, roomCode!)).revision)
       .toBeGreaterThan(owner.revision);
-    const afterClickedAction = playing(await getRoom(actingPage, roomCode));
+    let afterClickedAction = playing(await getRoom(actingPage, roomCode));
+    if (botIsActing(afterClickedAction)) {
+      await expect(
+        actingPage.getByRole("button", { name: "Skip to your turn" }),
+      ).toBeVisible();
+      await actingPage
+        .getByRole("button", { name: "Skip to your turn" })
+        .click();
+      await expect
+        .poll(async () => botIsActing(playing(await getRoom(actingPage, roomCode!))))
+        .toBe(false);
+      afterClickedAction = playing(await getRoom(actingPage, roomCode));
+    }
     await waitForRevision(observingPage, roomCode, afterClickedAction.revision);
     await expect(
       observingPage
@@ -319,6 +422,8 @@ test("real two-browser room remains seat-safe through spectating and restart", a
           afterClickedAction.situation.currentActorId,
         ),
     ).toBe(true);
+    expect(await webMCPAudit(pageA)).toEqual(initialOwnerTools);
+    expect(await webMCPAudit(pageB)).toEqual(initialGuestTools);
 
     let adviceOwner = playing(await getRoom(pageA, roomCode));
     let adviceGuest = playing(await getRoom(pageB, roomCode));
@@ -330,6 +435,8 @@ test("real two-browser room remains seat-safe through spectating and restart", a
       adviceOwner = playing(await getRoom(pageA, roomCode));
       adviceGuest = playing(await getRoom(pageB, roomCode));
     }
+    adviceOwner = await advanceBotsToHuman(pageA, roomCode, adviceOwner);
+    adviceGuest = playing(await getRoom(pageB, roomCode));
     const advicePage =
       adviceOwner.situation.currentActorId === adviceOwner.viewer.playerId
         ? pageA
@@ -383,7 +490,11 @@ test("real two-browser room remains seat-safe through spectating and restart", a
         await waitForRevision(spectator.page, roomCode, spectator.room.revision);
         await expect
           .poll(() => toolNames(spectator.page))
-          .toEqual(["get_current_situation", "get_hand_history"]);
+          .toEqual([
+            "get_current_situation",
+            "get_hand_history",
+            "stage_recommendation",
+          ]);
         await expect(
           spectator.page
             .getByLabel("Private copilot and current hand")
@@ -407,6 +518,18 @@ test("real two-browser room remains seat-safe through spectating and restart", a
           hero: { cards: [] },
           legalActions: [],
         });
+        const spectatorRecommendation = (await executeTool(
+          spectator.page,
+          "stage_recommendation",
+          {
+            action: "check",
+            stateVersion: spectator.room.situation.stateVersion,
+          },
+        )) as { ok: boolean; error?: { code?: string } };
+        expect(spectatorRecommendation.ok).toBe(false);
+        expect(spectatorRecommendation.error?.code).toMatch(
+          /^(?:NOT_YOUR_TURN|HAND_COMPLETE|GAME_COMPLETE)$/,
+        );
         safePayload(view);
         spectatorChecked = true;
       }
@@ -417,6 +540,14 @@ test("real two-browser room remains seat-safe through spectating and restart", a
       }
 
       if (currentOwner.situation.handResult) {
+        const advanced = await mutate(pageA, roomCode, "advance", {
+          expectedRevision: currentOwner.revision,
+        });
+        expect([200, 409]).toContain(advanced.status);
+        continue;
+      }
+
+      if (botIsActing(currentOwner)) {
         const advanced = await mutate(pageA, roomCode, "advance", {
           expectedRevision: currentOwner.revision,
         });

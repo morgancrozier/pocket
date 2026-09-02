@@ -13,7 +13,11 @@ async function installWebMCPStub(page: Page) {
       registrations: {} as Record<string, number>,
       aborts: {} as Record<string, number>,
       overlappingRegistrations: [] as string[],
+      identities: {} as Record<string, number>,
+      toolChanges: 0,
     };
+    const toolIds = new WeakMap<WebMCPTool, number>();
+    let nextToolId = 1;
     Object.defineProperty(window, "__pocketWebMCPAudit", {
       configurable: true,
       value: audit,
@@ -28,14 +32,21 @@ async function installWebMCPStub(page: Page) {
           if (tools.has(tool.name)) {
             audit.overlappingRegistrations.push(tool.name);
           }
+          const toolId = toolIds.get(tool) ?? nextToolId++;
+          toolIds.set(tool, toolId);
+          audit.identities[tool.name] = toolId;
           audit.registrations[tool.name] =
             (audit.registrations[tool.name] ?? 0) + 1;
           tools.set(tool.name, tool);
+          audit.toolChanges += 1;
           options?.signal?.addEventListener(
             "abort",
             () => {
               audit.aborts[tool.name] = (audit.aborts[tool.name] ?? 0) + 1;
-              if (tools.get(tool.name) === tool) tools.delete(tool.name);
+              if (tools.get(tool.name) === tool) {
+                tools.delete(tool.name);
+                audit.toolChanges += 1;
+              }
             },
             { once: true },
           );
@@ -64,7 +75,7 @@ test.describe("in-game activity clarity", () => {
     await expect(page.locator(".copilot-activity")).toHaveCount(0);
   });
 
-  test("refresh and re-entry leave exactly one live registration per tool", async ({
+  test("gameplay keeps one stable registration per tool until the table unmounts", async ({
     page,
   }) => {
     await installWebMCPStub(page);
@@ -95,6 +106,8 @@ test.describe("in-game activity clarity", () => {
                 registrations: Record<string, number>;
                 aborts: Record<string, number>;
                 overlappingRegistrations: string[];
+                identities: Record<string, number>;
+                toolChanges: number;
               };
             }
           ).__pocketWebMCPAudit,
@@ -118,8 +131,66 @@ test.describe("in-game activity clarity", () => {
       events: expect.any(Array),
     });
     expect(snapshot.audit.overlappingRegistrations).toEqual([]);
+    for (const name of [
+      "get_current_situation",
+      "get_hand_history",
+      "stage_recommendation",
+    ]) {
+      expect(snapshot.audit.registrations[name]).toBeGreaterThanOrEqual(1);
+    }
+    const initialRegistrations = snapshot.audit.registrations;
+    const initialAborts = snapshot.audit.aborts;
+    const initialToolChanges = snapshot.audit.toolChanges;
+    const initialIdentities = snapshot.audit.identities;
+
+    const staged = await page.evaluate(async () => {
+      const tools = await document.modelContext.getTools();
+      const suggestion = tools.find(
+        (candidate) => candidate.name === "stage_recommendation",
+      );
+      if (!suggestion) throw new Error("Suggestion tool is unavailable.");
+      return JSON.parse(
+        await document.modelContext.executeTool(suggestion, {
+          action: "call",
+          stateVersion: 17,
+        }),
+      ) as { ok: boolean };
+    });
+    expect(staged.ok).toBe(true);
+    await expect(page.locator(".copilot-recommendation.is-current")).toBeVisible();
+    await page.getByRole("button", { name: "Dismiss" }).click();
+    await expect(page.locator(".copilot-recommendation.is-current")).toHaveCount(0);
+    snapshot = await inspect();
+    expect(snapshot.audit.registrations).toEqual(initialRegistrations);
+    expect(snapshot.audit.aborts).toEqual(initialAborts);
+    expect(snapshot.audit.identities).toEqual(initialIdentities);
+    expect(snapshot.audit.toolChanges).toBe(initialToolChanges);
 
     await page.getByRole("button", { name: "Call 32" }).click();
+    await expect(page.getByRole("heading", { name: "Alex is acting" })).toBeVisible();
+    const opponentTurn = await page.evaluate(async () => {
+      const tools = await document.modelContext.getTools();
+      const current = tools.find(
+        (candidate) => candidate.name === "get_current_situation",
+      );
+      const suggestion = tools.find(
+        (candidate) => candidate.name === "stage_recommendation",
+      );
+      if (!current || !suggestion) throw new Error("WebMCP tools are unavailable.");
+      const situation = JSON.parse(
+        await document.modelContext.executeTool(current, {}),
+      ) as { game: { stateVersion: number } };
+      return JSON.parse(
+        await document.modelContext.executeTool(suggestion, {
+          action: "check",
+          stateVersion: situation.game.stateVersion,
+        }),
+      ) as { ok: boolean; error?: { code?: string } };
+    });
+    expect(opponentTurn).toMatchObject({
+      ok: false,
+      error: { code: "NOT_YOUR_TURN" },
+    });
     await expect
       .poll(async () => (await inspect()).names)
       .toEqual([
@@ -127,9 +198,36 @@ test.describe("in-game activity clarity", () => {
         "get_hand_history",
         "stage_recommendation",
       ]);
+    await expect(page.getByRole("heading", { name: "Your turn" })).toBeVisible();
     snapshot = await inspect();
     expect(snapshot.audit.overlappingRegistrations).toEqual([]);
-    expect(snapshot.audit.aborts.stage_recommendation).toBeGreaterThanOrEqual(1);
+    expect(snapshot.audit.registrations).toEqual(initialRegistrations);
+    expect(snapshot.audit.aborts).toEqual(initialAborts);
+    expect(snapshot.audit.identities).toEqual(initialIdentities);
+    expect(snapshot.audit.toolChanges).toBe(initialToolChanges);
+
+    const stale = await page.evaluate(async () => {
+      const tools = await document.modelContext.getTools();
+      const suggestion = tools.find(
+        (candidate) => candidate.name === "stage_recommendation",
+      );
+      if (!suggestion) throw new Error("Suggestion tool is unavailable.");
+      return JSON.parse(
+        await document.modelContext.executeTool(suggestion, {
+          action: "call",
+          stateVersion: 17,
+        }),
+      ) as { ok: boolean; error?: { code?: string } };
+    });
+    expect(stale).toMatchObject({
+      ok: false,
+      error: { code: "STALE_STATE" },
+    });
+    snapshot = await inspect();
+    expect(snapshot.audit.registrations).toEqual(initialRegistrations);
+    expect(snapshot.audit.aborts).toEqual(initialAborts);
+    expect(snapshot.audit.identities).toEqual(initialIdentities);
+    expect(snapshot.audit.toolChanges).toBe(initialToolChanges);
 
     await page.getByRole("link", { name: "Pocket home" }).click();
     await expect(
@@ -140,6 +238,25 @@ test.describe("in-game activity clarity", () => {
         (await document.modelContext.getTools()).map((tool) => tool.name),
       ),
     ).toEqual([]);
+    const unmountedAudit = await page.evaluate(
+      () =>
+        (
+          window as typeof window & {
+            __pocketWebMCPAudit: {
+              aborts: Record<string, number>;
+              toolChanges: number;
+            };
+          }
+        ).__pocketWebMCPAudit,
+    );
+    for (const name of [
+      "get_current_situation",
+      "get_hand_history",
+      "stage_recommendation",
+    ]) {
+      expect(unmountedAudit.aborts[name]).toBe((initialAborts[name] ?? 0) + 1);
+    }
+    expect(unmountedAudit.toolChanges).toBe(initialToolChanges + 3);
 
     await page.goBack();
     await expect(page.getByText("WebMCP tools ready").first()).toBeVisible();
@@ -150,6 +267,15 @@ test.describe("in-game activity clarity", () => {
       "stage_recommendation",
     ]);
     expect(snapshot.audit.overlappingRegistrations).toEqual([]);
+    for (const name of [
+      "get_current_situation",
+      "get_hand_history",
+      "stage_recommendation",
+    ]) {
+      expect(snapshot.audit.registrations[name]).toBeGreaterThan(
+        initialRegistrations[name] ?? 0,
+      );
+    }
 
     await page.reload();
     await expect(page.getByText("WebMCP tools ready").first()).toBeVisible();

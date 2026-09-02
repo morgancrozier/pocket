@@ -275,7 +275,19 @@ async function installWebMCPStub(
 ) {
   await page.addInitScript(({ failSuggestionOnce }) => {
     const tools = new Map<string, { name: string; execute: (input: object) => unknown }>();
+    const audit = {
+      registrations: {} as Record<string, number>,
+      aborts: {} as Record<string, number>,
+      identities: {} as Record<string, number>,
+      toolChanges: 0,
+    };
+    const toolIds = new WeakMap<object, number>();
+    let nextToolId = 1;
     let suggestionFailed = false;
+    Object.defineProperty(window, "__pocketWebMCPAudit", {
+      configurable: true,
+      value: audit,
+    });
     Object.defineProperty(document, "modelContext", {
       configurable: true,
       value: {
@@ -291,11 +303,21 @@ async function installWebMCPStub(
             suggestionFailed = true;
             throw new Error("stage_recommendation registration failed for test.");
           }
+          const toolId = toolIds.get(tool) ?? nextToolId++;
+          toolIds.set(tool, toolId);
+          audit.identities[tool.name] = toolId;
+          audit.registrations[tool.name] =
+            (audit.registrations[tool.name] ?? 0) + 1;
           tools.set(tool.name, tool);
+          audit.toolChanges += 1;
           options?.signal?.addEventListener(
             "abort",
             () => {
-              if (tools.get(tool.name) === tool) tools.delete(tool.name);
+              audit.aborts[tool.name] = (audit.aborts[tool.name] ?? 0) + 1;
+              if (tools.get(tool.name) === tool) {
+                tools.delete(tool.name);
+                audit.toolChanges += 1;
+              }
             },
             { once: true },
           );
@@ -311,6 +333,22 @@ async function installWebMCPStub(
       },
     });
   }, options);
+}
+
+async function webMCPAudit(page: Page) {
+  return page.evaluate(
+    () =>
+      (
+        window as typeof window & {
+          __pocketWebMCPAudit: {
+            registrations: Record<string, number>;
+            aborts: Record<string, number>;
+            identities: Record<string, number>;
+            toolChanges: number;
+          };
+        }
+      ).__pocketWebMCPAudit,
+  );
 }
 
 async function suggest(
@@ -476,7 +514,7 @@ test("practice fallback is explicit and can retry the authoritative table", asyn
   expect(stateRequests).toBeGreaterThanOrEqual(2);
 });
 
-test("suggestion registration failure degrades status and later success clears it", async ({
+test("suggestion registration failure retries only after the table context remounts", async ({
   page,
 }) => {
   await installWebMCPStub(page, { failSuggestionOnce: true });
@@ -497,17 +535,22 @@ test("suggestion registration failure degrades status and later success clears i
 
   await page.getByRole("button", { name: "Call 4" }).click();
   await expect(page.locator(".status-pill")).toContainText(
-    "WebMCP tools ready",
-  );
-  await expect(page.locator(".status-pill")).not.toContainText(
     "WebMCP needs attention",
+  );
+  expect((await webMCPAudit(page)).registrations.stage_recommendation).toBeUndefined();
+
+  await page.getByRole("link", { name: "Pocket home" }).click();
+  await page.goBack();
+  await expect(page.locator(".status-pill")).toContainText(
+    "WebMCP tools ready",
   );
 });
 
-test("authoritative bot frames play in order and can be skipped without another mutation", async ({
+test("authoritative bot actions pace one mutation at a time and skip preserves order", async ({
   page,
 }) => {
   let actionRequests = 0;
+  let advanceRequests = 0;
   await installWebMCPStub(page);
   await page.route("**/api/games/demo/state", (route) =>
     route.fulfill({ status: 200, json: initialSituation }),
@@ -576,8 +619,18 @@ test("authoritative bot frames play in order and can be skipped without another 
     actionRequests += 1;
     await route.fulfill({
       status: 200,
-      json: transitionResult(ready, [afterHuman, afterBet, ready]),
+      json: transitionResult(afterHuman),
     });
+  });
+  await page.route("**/api/games/demo/advance", async (route) => {
+    advanceRequests += 1;
+    const body = route.request().postDataJSON() as {
+      expectedStateVersion: number;
+    };
+    const next = body.expectedStateVersion === afterHuman.stateVersion
+      ? afterBet
+      : ready;
+    await route.fulfill({ status: 200, json: transitionResult(next) });
   });
 
   await page.goto("/play");
@@ -587,6 +640,8 @@ test("authoritative bot frames play in order and can be skipped without another 
     page.getByRole("button", { name: "Skip to your turn" }),
   ).toBeVisible();
   await expect(page.getByRole("heading", { name: "Alex is acting" })).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(advanceRequests).toBe(0);
   await expect(page.getByRole("button", { name: "Fold" })).toHaveCount(0);
   await expect
     .poll(async () =>
@@ -594,12 +649,32 @@ test("authoritative bot frames play in order and can be skipped without another 
         (await document.modelContext.getTools()).map((tool) => tool.name),
       ),
     )
-    .not.toContain("stage_recommendation");
+    .toContain("stage_recommendation");
+  const opponentStateVersion = await page.evaluate(async () => {
+    const tools = await document.modelContext.getTools();
+    const current = tools.find(
+      (candidate) => candidate.name === "get_current_situation",
+    );
+    if (!current) throw new Error("get_current_situation was not registered.");
+    const situation = JSON.parse(
+      String(await document.modelContext.executeTool(current, {})),
+    ) as { game: { stateVersion: number } };
+    return situation.game.stateVersion;
+  });
+  expect(opponentStateVersion).toBe(afterHuman.stateVersion);
+  const opponentRecommendation = await suggest(page, {
+    action: "check",
+    stateVersion: opponentStateVersion,
+  });
+  expect(opponentRecommendation).toMatchObject({
+    ok: false,
+    error: { code: "NOT_YOUR_TURN" },
+  });
 
-  await expect(page.locator(".playback-status")).toHaveText("Alex bets · 8.");
   await page.getByRole("button", { name: "Skip to your turn" }).click();
 
   await expect(page.getByRole("heading", { name: "Your turn" })).toBeVisible();
+  await expect(page.locator(".playback-status")).toHaveCount(0);
   await expect(
     page.locator(
       '.player-seat.seat-1 .seat-action-cue > [aria-hidden="true"]',
@@ -607,13 +682,21 @@ test("authoritative bot frames play in order and can be skipped without another 
   ).toHaveText("Bet 8");
   await expect(page.getByRole("button", { name: "Call 8" })).toBeVisible();
   expect(actionRequests).toBe(1);
+  expect(advanceRequests).toBe(2);
+  await expect(
+    page.locator(".hand-feed-item").filter({ hasText: /Alex bets\s+8/ }),
+  ).toHaveCount(1);
+  await expect(
+    page.locator(".hand-feed-item").filter({ hasText: "June folds" }),
+  ).toHaveCount(1);
 });
 
-test("refresh during playback catches up to the committed state without replaying frames", async ({
+test("refresh cancels the pending delay and resumes from the committed bot state", async ({
   page,
 }) => {
   await installWebMCPStub(page);
   let serverSituation: unknown = initialSituation;
+  let advanceRequests = 0;
   await page.route("**/api/games/demo/state", (route) =>
     route.fulfill({ status: 200, json: serverSituation }),
   );
@@ -659,11 +742,16 @@ test("refresh during playback catches up to the committed state without replayin
     ],
   };
   await page.route("**/api/games/demo/action", async (route) => {
-    serverSituation = final;
+    serverSituation = afterHuman;
     await route.fulfill({
       status: 200,
-      json: transitionResult(final, [afterHuman, final]),
+      json: transitionResult(afterHuman),
     });
+  });
+  await page.route("**/api/games/demo/advance", async (route) => {
+    advanceRequests += 1;
+    serverSituation = final;
+    await route.fulfill({ status: 200, json: transitionResult(final) });
   });
 
   await page.goto("/play");
@@ -673,17 +761,19 @@ test("refresh during playback catches up to the committed state without replayin
   ).toBeVisible();
   await page.reload();
 
-  await expect(page.getByText("Caught up — Alex checks.", { exact: true })).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Skip to your turn" }),
-  ).toHaveCount(0);
+  ).toBeVisible();
+  expect(advanceRequests).toBe(0);
+  await page.getByRole("button", { name: "Skip to your turn" }).click();
   await expect(page.getByRole("button", { name: "Check" })).toBeVisible();
+  expect(advanceRequests).toBe(1);
   await expect(
     page.locator(".hand-feed-item").filter({ hasText: "Alex checks" }),
   ).toHaveCount(1);
 });
 
-test("reduced motion renders the final decision immediately with one causal summary", async ({
+test("reduced motion keeps authoritative pacing and the explicit skip", async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -691,9 +781,29 @@ test("reduced motion renders the final decision immediately with one causal summ
   await page.route("**/api/games/demo/state", (route) =>
     route.fulfill({ status: 200, json: initialSituation }),
   );
-  const final = {
+  const afterHuman = {
     ...initialSituation,
+    stateVersion: 19,
+    isYourTurn: false,
+    currentActorId: "bot-east",
+    legalActions: [],
+    recentActions: [
+      ...initialSituation.recentActions,
+      {
+        sequence: 2,
+        street: "turn",
+        playerId: "hero",
+        playerName: "Morgan",
+        action: "call",
+        amount: 4,
+      },
+    ],
+  };
+  const final = {
+    ...afterHuman,
     stateVersion: 20,
+    isYourTurn: true,
+    currentActorId: "hero",
     currentBet: 8,
     toCall: 8,
     legalActions: [
@@ -702,9 +812,9 @@ test("reduced motion renders the final decision immediately with one causal summ
       { type: "raise", minTotal: 16, maxTotal: 32 },
     ],
     recentActions: [
-      ...initialSituation.recentActions,
+      ...afterHuman.recentActions,
       {
-        sequence: 2,
+        sequence: 3,
         street: "turn",
         playerId: "bot-east",
         playerName: "Alex",
@@ -716,19 +826,20 @@ test("reduced motion renders the final decision immediately with one causal summ
   await page.route("**/api/games/demo/action", (route) =>
     route.fulfill({
       status: 200,
-      json: transitionResult(final),
+      json: transitionResult(afterHuman),
     }),
+  );
+  await page.route("**/api/games/demo/advance", (route) =>
+    route.fulfill({ status: 200, json: transitionResult(final) }),
   );
 
   await page.goto("/play");
   await page.getByRole("button", { name: "Call 4" }).click();
 
   await expect(
-    page.getByText("Caught up — Facing Alex’s 8-chip bet.", { exact: true }),
-  ).toBeVisible();
-  await expect(
     page.getByRole("button", { name: "Skip to your turn" }),
-  ).toHaveCount(0);
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Skip to your turn" }).click();
   await expect(page.getByRole("button", { name: "Call 8" })).toBeVisible();
 });
 
@@ -772,6 +883,14 @@ test("safe tournament UI replaces and follows advice through restart", async ({
     page.getByText("Blinds 2 / 4", { exact: false }).first(),
   ).toBeVisible();
   await expect(page.locator(".player-seat")).toHaveCount(4);
+  const initialWebMCPAudit = await webMCPAudit(page);
+  for (const name of [
+    "get_current_situation",
+    "get_hand_history",
+    "stage_recommendation",
+  ]) {
+    expect(initialWebMCPAudit.registrations[name]).toBeGreaterThanOrEqual(1);
+  }
   await page
     .getByRole("button", { name: /Ready for your agent.*WebMCP tools ready/ })
     .click();
@@ -869,7 +988,7 @@ test("safe tournament UI replaces and follows advice through restart", async ({
         (await document.modelContext.getTools()).map((tool) => tool.name),
       ),
     )
-    .not.toContain("stage_recommendation");
+    .toContain("stage_recommendation");
 
   await page.locator(".companion-rail-mobile-header button").click();
   await page.getByRole("button", { name: "Play again" }).click();
@@ -884,6 +1003,8 @@ test("safe tournament UI replaces and follows advice through restart", async ({
     }),
   ).toBeVisible();
   expect(restartBodies).toEqual([{ expectedStateVersion: 24 }]);
+  const restartedWebMCPAudit = await webMCPAudit(page);
+  expect(restartedWebMCPAudit).toEqual(initialWebMCPAudit);
 
   await page.setViewportSize({ width: 400, height: 860 });
   await expect(page.getByRole("heading", { name: "Your turn" })).toBeVisible();

@@ -4,7 +4,7 @@ import { DemoGameError } from "@/lib/poker/demo-game";
 
 const mocks = vi.hoisted(() => ({
   requireDemoUserId: vi.fn(),
-  advanceBots: vi.fn(),
+  advanceBot: vi.fn(),
 }));
 
 vi.mock("@/lib/poker/demo-session", async (importOriginal) => {
@@ -13,7 +13,7 @@ vi.mock("@/lib/poker/demo-session", async (importOriginal) => {
 });
 
 vi.mock("@/lib/poker/demo-game-store", () => ({
-  getDemoGameStore: () => ({ advanceBots: mocks.advanceBots }),
+  getDemoGameStore: () => ({ advanceBot: mocks.advanceBot }),
   parseDemoGameMode: () => "judge",
   parseJudgeDemoRun: () => "judge-run",
 }));
@@ -34,23 +34,23 @@ function request(body: unknown) {
 describe("POST /api/games/demo/advance", () => {
   beforeEach(() => {
     mocks.requireDemoUserId.mockReset();
-    mocks.advanceBots.mockReset();
+    mocks.advanceBot.mockReset();
     mocks.requireDemoUserId.mockResolvedValue("demo-user");
   });
 
-  it("returns the ordered bot transition without accepting an action", async () => {
+  it("advances exactly one authoritative bot action without accepting an action", async () => {
     const transition = {
       situation: { gameId: "judge-run", stateVersion: 2 },
       frames: [{ gameId: "judge-run", stateVersion: 2 }],
     };
-    mocks.advanceBots.mockResolvedValue(transition);
+    mocks.advanceBot.mockResolvedValue(transition);
 
     const response = await POST(request({ expectedStateVersion: 1 }));
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(await response.json()).toEqual(transition);
-    expect(mocks.advanceBots).toHaveBeenCalledWith({
+    expect(mocks.advanceBot).toHaveBeenCalledWith({
       actorId: "hero",
       expectedStateVersion: 1,
     });
@@ -61,9 +61,9 @@ describe("POST /api/games/demo/advance", () => {
       request({ expectedStateVersion: 1, action: "call" }),
     );
     expect(malformed.status).toBe(400);
-    expect(mocks.advanceBots).not.toHaveBeenCalled();
+    expect(mocks.advanceBot).not.toHaveBeenCalled();
 
-    mocks.advanceBots.mockRejectedValueOnce(
+    mocks.advanceBot.mockRejectedValueOnce(
       new DemoGameError("STALE_STATE", "The table changed."),
     );
     const stale = await POST(request({ expectedStateVersion: 1 }));

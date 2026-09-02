@@ -63,6 +63,7 @@ interface HandHistoryToolContext extends SituationToolContext {
 interface RecommendationToolContext extends SituationToolContext {
   onSuggestion: (suggestion: AgentSuggestion) => void;
   isRevisionCurrent?: () => boolean;
+  isInteractionLocked?: () => boolean;
 }
 
 const ACTIVITY_FRAME_TIMEOUT_MS = 250;
@@ -535,7 +536,7 @@ export function createCurrentSituationTool({
   return {
     name: "get_current_situation",
     description:
-      "Read the authoritative, seat-safe current hand: hero cards, public board, stacks and commitments, action order, pot layers, exact next actor, legal actions, and public history. recentEvents rows follow context.eventFields. Forced posts are separate from voluntary actions. amountToCall is chips to add; bet/raise minTotal and maxTotal are final street totals (raise to X). Re-read after the table changes. stage_recommendation is available only on the hero's turn.",
+      "Read the authoritative, seat-safe current hand: hero cards, public board, stacks and commitments, action order, pot layers, exact next actor, legal actions, and public history. recentEvents rows follow context.eventFields. Forced posts are separate from voluntary actions. amountToCall is chips to add; bet/raise minTotal and maxTotal are final street totals (raise to X). Re-read after the table changes. stage_recommendation only succeeds on the hero's current turn.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -768,10 +769,9 @@ export function createStageRecommendationTool({
   getSituation,
   onSuggestion,
   isRevisionCurrent,
+  isInteractionLocked,
   onActivity,
 }: RecommendationToolContext): WebMCPTool {
-  requireSituation(getSituation);
-
   return {
     name: "stage_recommendation",
     description:
@@ -894,6 +894,14 @@ export function createStageRecommendationTool({
         return reject(
           "NOT_YOUR_TURN",
           "It is no longer the human player's turn. Call get_current_situation again before recommending.",
+          current,
+        );
+      }
+
+      if (isInteractionLocked?.()) {
+        return reject(
+          "STALE_STATE",
+          "Pocket is processing a table transition. Call get_current_situation again after the table settles.",
           current,
         );
       }

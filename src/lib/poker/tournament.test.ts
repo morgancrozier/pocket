@@ -51,17 +51,21 @@ async function settleHand(
     passiveIntentFromLegal(situation.legalActions),
 ): Promise<PokerSituation> {
   let situation = initial;
-  for (let guard = 0; !situation.handResult && guard < 50; guard += 1) {
-    if (!situation.isYourTurn) {
-      throw new Error(`Unexpected table pause: ${JSON.stringify(situation)}`);
-    }
-    situation = (
-      await game.act({
-        actorId: DEMO_HERO_ID,
-        expectedStateVersion: situation.stateVersion,
-        intent: chooseHuman(situation),
-      })
-    ).situation;
+  for (let guard = 0; !situation.handResult && guard < 150; guard += 1) {
+    situation = situation.isYourTurn
+      ? (
+          await game.act({
+            actorId: DEMO_HERO_ID,
+            expectedStateVersion: situation.stateVersion,
+            intent: chooseHuman(situation),
+          })
+        ).situation
+      : (
+          await game.advanceBot({
+            actorId: DEMO_HERO_ID,
+            expectedStateVersion: situation.stateVersion,
+          })
+        ).situation;
   }
   if (!situation.handResult) throw new Error("The hand did not settle.");
   return situation;
@@ -72,7 +76,7 @@ async function finishTournament(
   chooseHuman: (situation: PokerSituation) => PokerActionIntent,
 ): Promise<PokerSituation> {
   let situation = await game.getSituation(DEMO_HERO_ID);
-  for (let guard = 0; !situation.gameResult && guard < 100; guard += 1) {
+  for (let guard = 0; !situation.gameResult && guard < 500; guard += 1) {
     situation = situation.handResult
       ? (
           await game.startNextHand({
@@ -80,13 +84,20 @@ async function finishTournament(
             expectedStateVersion: situation.stateVersion,
           })
         ).situation
-      : (
+      : !situation.isYourTurn
+        ? (
+            await game.advanceBot({
+              actorId: DEMO_HERO_ID,
+              expectedStateVersion: situation.stateVersion,
+            })
+          ).situation
+        : (
           await game.act({
             actorId: DEMO_HERO_ID,
             expectedStateVersion: situation.stateVersion,
             intent: chooseHuman(situation),
           })
-        ).situation;
+          ).situation;
   }
   if (!situation.gameResult) throw new Error("The tournament did not finish.");
   return situation;

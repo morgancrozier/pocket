@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { createDemoGame, DEMO_HERO_ID } from "./demo-game";
+import type { DemoGameService } from "./demo-game";
+import type { PokerSituation } from "@/types/poker";
+
+async function advanceToHeroOrSettlement(
+  game: DemoGameService,
+  initial: PokerSituation,
+): Promise<PokerSituation> {
+  let situation = initial;
+  for (let guard = 0; !situation.isYourTurn && !situation.handResult; guard += 1) {
+    if (guard >= 100) throw new Error("Bot actions did not reach the hero.");
+    situation = (
+      await game.advanceBot({
+        actorId: DEMO_HERO_ID,
+        expectedStateVersion: situation.stateVersion,
+      })
+    ).situation;
+  }
+  return situation;
+}
 
 describe("Gate 2 demo game", () => {
   it("opens the judge path before any voluntary human action", async () => {
@@ -26,7 +45,7 @@ describe("Gate 2 demo game", () => {
       ),
     ).toBe(false);
 
-    const transition = await game.advanceBots({
+    const transition = await game.advanceBot({
       actorId: DEMO_HERO_ID,
       expectedStateVersion: opening.stateVersion,
     });
@@ -53,12 +72,24 @@ describe("Gate 2 demo game", () => {
   it("settles a complete human-and-bot hand with chips conserved", async () => {
     const game = createDemoGame({ deterministicSeed: 42 });
     const initialTotal = await game.getChipTotal();
-    let situation = await game.getSituation(DEMO_HERO_ID);
+    let situation = await advanceToHeroOrSettlement(
+      game,
+      await game.getSituation(DEMO_HERO_ID),
+    );
 
     expect(situation.isYourTurn).toBe(true);
     expect(situation.yourCards).toHaveLength(2);
 
-    for (let guard = 0; !situation.handResult && guard < 20; guard += 1) {
+    for (let guard = 0; !situation.handResult && guard < 100; guard += 1) {
+      if (!situation.isYourTurn) {
+        situation = (
+          await game.advanceBot({
+            actorId: DEMO_HERO_ID,
+            expectedStateVersion: situation.stateVersion,
+          })
+        ).situation;
+        continue;
+      }
       const action =
         situation.legalActions.find((candidate) => candidate.type === "check") ??
         situation.legalActions.find((candidate) => candidate.type === "call") ??
@@ -83,7 +114,10 @@ describe("Gate 2 demo game", () => {
 
   it("rejects out-of-turn, illegal, and stale human requests without mutation", async () => {
     const game = createDemoGame({ deterministicSeed: 7 });
-    const before = await game.getSituation(DEMO_HERO_ID);
+    const before = await advanceToHeroOrSettlement(
+      game,
+      await game.getSituation(DEMO_HERO_ID),
+    );
 
     await expect(
       game.act({
@@ -125,19 +159,23 @@ describe("Gate 2 demo game", () => {
 
   it("keeps a settled table intact when the human has no chips for another hand", async () => {
     const game = createDemoGame({ deterministicSeed: 1 });
-    const beforeShove = await game.getSituation(DEMO_HERO_ID);
+    const beforeShove = await advanceToHeroOrSettlement(
+      game,
+      await game.getSituation(DEMO_HERO_ID),
+    );
     const raise = beforeShove.legalActions.find(
       (action) => action.type === "raise",
     );
 
     expect(raise?.maxTotal).toBeDefined();
-    const settled = (
+    let settled = (
       await game.act({
       actorId: DEMO_HERO_ID,
       expectedStateVersion: beforeShove.stateVersion,
       intent: { action: "raise", amount: raise!.maxTotal },
       })
     ).situation;
+    settled = await advanceToHeroOrSettlement(game, settled);
 
     expect(settled.handResult).not.toBeNull();
     expect(settled.yourStack).toBe(0);

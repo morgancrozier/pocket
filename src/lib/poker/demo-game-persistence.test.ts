@@ -30,6 +30,23 @@ function passiveIntent(situation: PokerSituation): PokerActionIntent {
   return { action: action!.type };
 }
 
+async function advanceToHeroOrSettlement(
+  service: DemoGameService,
+  initial: PokerSituation,
+): Promise<PokerSituation> {
+  let situation = initial;
+  for (let guard = 0; !situation.isYourTurn && !situation.handResult; guard += 1) {
+    if (guard >= 100) throw new Error("Bot actions did not reach the hero.");
+    situation = (
+      await service.advanceBot({
+        actorId: DEMO_HERO_ID,
+        expectedStateVersion: situation.stateVersion,
+      })
+    ).situation;
+  }
+  return situation;
+}
+
 async function settlePersistedHand(
   repository: MemoryDemoGameRepository,
   seed: number,
@@ -40,15 +57,22 @@ async function settlePersistedHand(
   });
   let situation = await service.getSituation(DEMO_HERO_ID);
 
-  for (let guard = 0; !situation.handResult && guard < 20; guard += 1) {
+  for (let guard = 0; !situation.handResult && guard < 100; guard += 1) {
     service = createDemoGame({ deterministicSeed: seed, repository });
-    situation = (
-      await service.act({
-        actorId: DEMO_HERO_ID,
-        expectedStateVersion: situation.stateVersion,
-        intent: passiveIntent(situation),
-      })
-    ).situation;
+    situation = situation.isYourTurn
+      ? (
+          await service.act({
+            actorId: DEMO_HERO_ID,
+            expectedStateVersion: situation.stateVersion,
+            intent: passiveIntent(situation),
+          })
+        ).situation
+      : (
+          await service.advanceBot({
+            actorId: DEMO_HERO_ID,
+            expectedStateVersion: situation.stateVersion,
+          })
+        ).situation;
   }
 
   return situation;
@@ -75,7 +99,10 @@ describe("Gate 2 durable demo boundary", () => {
       deterministicSeed: 52,
       repository,
     });
-    const before = await firstService.getSituation(DEMO_HERO_ID);
+    const before = await advanceToHeroOrSettlement(
+      firstService,
+      await firstService.getSituation(DEMO_HERO_ID),
+    );
     const afterAction = await firstService.act({
       actorId: DEMO_HERO_ID,
       expectedStateVersion: before.stateVersion,
@@ -112,10 +139,14 @@ describe("Gate 2 durable demo boundary", () => {
     expect(resumed.recentActions).toEqual(afterAction.situation.recentActions);
   });
 
-  it("accepts exactly one concurrent action and conflicts before the loser runs bots", async () => {
+  it("accepts exactly one concurrent human action without running any bot", async () => {
     const repository = new MemoryDemoGameRepository();
     const initializer = createDemoGame({ deterministicSeed: 63, repository });
-    const before = await initializer.getSituation(DEMO_HERO_ID);
+    const before = await advanceToHeroOrSettlement(
+      initializer,
+      await initializer.getSituation(DEMO_HERO_ID),
+    );
+    const commitsBefore = repository.committedRevisionCount(DEMO_GAME_ID);
     const intent = passiveIntent(before);
     const firstBot = vi.fn((decision: ServerPokerDecision) => {
       const action =
@@ -167,8 +198,10 @@ describe("Gate 2 durable demo boundary", () => {
 
     const botSpies = [firstBot, secondBot];
     expect(botSpies[rejectedIndexes[0]!]!).not.toHaveBeenCalled();
-    expect(botSpies[acceptedIndexes[0]!]!.mock.calls.length).toBeGreaterThan(0);
-    expect(repository.committedRevisionCount(DEMO_GAME_ID)).toBe(1);
+    expect(botSpies[acceptedIndexes[0]!]!).not.toHaveBeenCalled();
+    expect(repository.committedRevisionCount(DEMO_GAME_ID)).toBe(
+      commitsBefore + 1,
+    );
 
     const accepted = (
       outcomes[acceptedIndexes[0]!] as PromiseFulfilledResult<
@@ -181,10 +214,77 @@ describe("Gate 2 durable demo boundary", () => {
     expect(persisted).toEqual(accepted);
   });
 
+  it("commits exactly one bot action per version and exposes that intermediate state to WebMCP", async () => {
+    const repository = new MemoryDemoGameRepository();
+    const firstBot = vi.fn((decision: ServerPokerDecision) => {
+      const action =
+        decision.legalActions.find((candidate) => candidate.type === "check") ??
+        decision.legalActions.find((candidate) => candidate.type === "call") ??
+        decision.legalActions.find((candidate) => candidate.type === "fold");
+      if (!action) throw new Error("No passive bot action is available.");
+      return { action: action.type } as PokerActionIntent;
+    });
+    const secondBot = vi.fn(firstBot.getMockImplementation()!);
+    const first = createDemoGame({
+      judgeDemo: true,
+      repository,
+      chooseBotIntent: firstBot,
+      claimIdFactory: () => "00000000-0000-4000-8000-000000000011",
+    });
+    const opening = await first.getSituation(DEMO_HERO_ID);
+    const second = createDemoGame({
+      judgeDemo: true,
+      repository,
+      chooseBotIntent: secondBot,
+      claimIdFactory: () => "00000000-0000-4000-8000-000000000012",
+    });
+
+    const outcomes = await Promise.allSettled([
+      first.advanceBot({
+        actorId: DEMO_HERO_ID,
+        expectedStateVersion: opening.stateVersion,
+      }),
+      second.advanceBot({
+        actorId: DEMO_HERO_ID,
+        expectedStateVersion: opening.stateVersion,
+      }),
+    ]);
+
+    const accepted = outcomes.find(
+      (outcome): outcome is PromiseFulfilledResult<
+        Awaited<ReturnType<DemoGameService["advanceBot"]>>
+      > => outcome.status === "fulfilled",
+    );
+    expect(accepted).toBeDefined();
+    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
+    expect(firstBot.mock.calls.length + secondBot.mock.calls.length).toBe(1);
+    expect(repository.committedRevisionCount(DEMO_GAME_ID)).toBe(1);
+
+    const intermediate = accepted!.value.situation;
+    const persisted = await first.getSituation(DEMO_HERO_ID);
+    expect(persisted).toEqual(intermediate);
+    expect(intermediate.stateVersion).toBe(opening.stateVersion + 1);
+    expect(intermediate.recentActions).toHaveLength(
+      opening.recentActions.length + 1,
+    );
+
+    const webmcp = JSON.parse(
+      await createCurrentSituationTool({
+        getSituation: () => intermediate,
+      }).execute({}),
+    ) as { game: { stateVersion: number }; table: { nextToAct: unknown } };
+    expect(webmcp.game.stateVersion).toBe(intermediate.stateVersion);
+    expect(webmcp.table.nextToAct).toMatchObject({ isHero: true });
+  });
+
   it("rejects illegal and out-of-turn mutations without holding a claim", async () => {
     const repository = new MemoryDemoGameRepository();
     const service = createDemoGame({ deterministicSeed: 74, repository });
-    const before = await service.getSituation(DEMO_HERO_ID);
+    const before = await advanceToHeroOrSettlement(
+      service,
+      await service.getSituation(DEMO_HERO_ID),
+    );
+    const commitsBefore = repository.committedRevisionCount(DEMO_GAME_ID);
 
     await expect(
       service.act({
@@ -207,7 +307,9 @@ describe("Gate 2 durable demo boundary", () => {
       intent: passiveIntent(before),
     });
     expect(accepted.situation.stateVersion).toBeGreaterThan(before.stateVersion);
-    expect(repository.committedRevisionCount(DEMO_GAME_ID)).toBe(1);
+    expect(repository.committedRevisionCount(DEMO_GAME_ID)).toBe(
+      commitsBefore + 1,
+    );
   });
 
   it("conserves chips through repeated persistence and settlement", async () => {

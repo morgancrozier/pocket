@@ -22,10 +22,9 @@ import {
   describeAction,
 } from "@/lib/poker/decision-presentation";
 import {
-  describeTransitionCatchUp,
   describeTransitionFrame,
-  transitionFrameDelay,
 } from "@/lib/poker/transition-playback";
+import { useBotPacing } from "@/lib/poker/use-bot-pacing";
 import {
   createRecommendationReceipt,
   isRecommendationReceiptCurrent,
@@ -57,31 +56,6 @@ import type {
 } from "@/types/poker";
 
 type DemoMode = "engine" | "loading" | "mock";
-
-const TRANSITION_PLAYBACK_STORAGE_KEY = "pocket:transition-playback";
-
-function readPlaybackMarker(): {
-  gameId: string;
-  finalStateVersion: number;
-} | null {
-  const serialized = sessionStorage.getItem(TRANSITION_PLAYBACK_STORAGE_KEY);
-  if (!serialized) return null;
-  try {
-    const value = JSON.parse(serialized) as {
-      gameId?: unknown;
-      finalStateVersion?: unknown;
-    };
-    return typeof value.gameId === "string" &&
-      Number.isSafeInteger(value.finalStateVersion)
-      ? {
-          gameId: value.gameId,
-          finalStateVersion: Number(value.finalStateVersion),
-        }
-      : null;
-  } catch {
-    return null;
-  }
-}
 
 function titleCase(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
@@ -332,28 +306,17 @@ export function PocketPrototype() {
     "Preparing your first hand…",
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isPlayingTransition, setIsPlayingTransition] = useState(false);
-  const [playbackStatus, setPlaybackStatus] = useState(
-    "Following the table action…",
-  );
   const [betDraft, setBetDraft] = useState("");
   const [betDraftError, setBetDraftError] = useState<string | null>(null);
   const [showDebug, setShowDebug] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextHandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const playbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const playbackResolveRef = useRef<(() => void) | null>(null);
-  const playbackGenerationRef = useRef(0);
-  const playbackFinalRef = useRef<PokerSituation | null>(null);
-  const playbackActiveRef = useRef(false);
-  const displayedSituationRef = useRef<PokerSituation | null>(null);
-  const authoritativeSituationRef = useRef<PokerSituation | null>(null);
-  const botAdvanceVersionRef = useRef<number | null>(null);
+  const situationRef = useRef<PokerSituation | null>(null);
   const autoNextHandVersionRef = useRef<number | null>(null);
   const judgeRunRef = useRef<string | null>(null);
   const suggestionRef = useRef<AgentSuggestion | null>(null);
   suggestionRef.current = suggestion;
-  displayedSituationRef.current = situation;
+  situationRef.current = situation;
 
   const clearSuggestion = useCallback(() => {
     sessionStorage.removeItem(AGENT_SUGGESTION_STORAGE_KEY);
@@ -377,146 +340,9 @@ export function PocketPrototype() {
     [],
   );
 
-  const cancelPlayback = useCallback(
-    (options: { renderFinal?: boolean; message?: string } = {}) => {
-      playbackGenerationRef.current += 1;
-      if (playbackTimerRef.current) {
-        clearTimeout(playbackTimerRef.current);
-        playbackTimerRef.current = null;
-      }
-      const resolve = playbackResolveRef.current;
-      playbackResolveRef.current = null;
-      resolve?.();
-
-      const final = playbackFinalRef.current;
-      playbackFinalRef.current = null;
-      playbackActiveRef.current = false;
-      sessionStorage.removeItem(TRANSITION_PLAYBACK_STORAGE_KEY);
-      setIsPlayingTransition(false);
-      setPlaybackStatus("Following the table action…");
-
-      if (options.renderFinal && final) {
-        const previous = displayedSituationRef.current ?? final;
-        displayedSituationRef.current = final;
-        setSituation(final);
-        setTableMessage(
-          options.message ??
-            describeTransitionCatchUp(previous, final),
-        );
-      }
-    },
-    [],
-  );
-
-  const presentTransition = useCallback(
-    async (
-      transition: PokerTransitionResult,
-    ): Promise<"completed" | "reduced" | "cancelled"> => {
-      if (
-        authoritativeSituationRef.current &&
-        authoritativeSituationRef.current.stateVersion >
-          transition.situation.stateVersion
-      ) {
-        return "cancelled";
-      }
-      const starting = displayedSituationRef.current ?? transition.situation;
-      cancelPlayback();
-      authoritativeSituationRef.current = transition.situation;
-
-      const orderedFrames = transition.frames
-        .filter((frame) => frame.stateVersion > starting.stateVersion)
-        .toSorted((left, right) => left.stateVersion - right.stateVersion);
-      if (
-        transition.situation.stateVersion > starting.stateVersion &&
-        orderedFrames.at(-1)?.stateVersion !== transition.situation.stateVersion
-      ) {
-        orderedFrames.push(transition.situation);
-      }
-
-      const prefersReducedMotion = window.matchMedia(
-        "(prefers-reduced-motion: reduce)",
-      ).matches;
-      if (prefersReducedMotion || orderedFrames.length === 0) {
-        displayedSituationRef.current = transition.situation;
-        setSituation(transition.situation);
-        setTableMessage(
-          describeTransitionCatchUp(starting, transition.situation),
-        );
-        return prefersReducedMotion ? "reduced" : "completed";
-      }
-
-      const generation = playbackGenerationRef.current;
-      playbackFinalRef.current = transition.situation;
-      playbackActiveRef.current = true;
-      sessionStorage.setItem(
-        TRANSITION_PLAYBACK_STORAGE_KEY,
-        JSON.stringify({
-          gameId: transition.situation.gameId,
-          finalStateVersion: transition.situation.stateVersion,
-        }),
-      );
-      setIsPlayingTransition(true);
-
-      let previous = starting;
-      for (const [index, frame] of orderedFrames.entries()) {
-        const previousSequence = previous.recentActions.reduce(
-          (latest, event) => Math.max(latest, event.sequence),
-          0,
-        );
-        const newAction = frame.recentActions.find(
-          (event) => event.sequence > previousSequence && event.action !== "deal",
-        );
-        const showImmediately =
-          index === 0 &&
-          (frame.handNumber !== previous.handNumber ||
-            newAction?.playerId === frame.yourPlayerId);
-
-        if (!showImmediately) {
-          await new Promise<void>((resolve) => {
-            playbackResolveRef.current = resolve;
-            playbackTimerRef.current = setTimeout(() => {
-              playbackTimerRef.current = null;
-              playbackResolveRef.current = null;
-              resolve();
-            }, transitionFrameDelay(previous, frame, orderedFrames.length));
-          });
-        }
-
-        if (playbackGenerationRef.current !== generation) return "cancelled";
-        const message = describeTransitionFrame(previous, frame);
-        displayedSituationRef.current = frame;
-        setSituation(frame);
-        setPlaybackStatus(message);
-        setTableMessage(message);
-        previous = frame;
-      }
-
-      if (playbackGenerationRef.current !== generation) return "cancelled";
-      displayedSituationRef.current = transition.situation;
-      setSituation(transition.situation);
-      playbackFinalRef.current = null;
-      playbackActiveRef.current = false;
-      sessionStorage.removeItem(TRANSITION_PLAYBACK_STORAGE_KEY);
-      setIsPlayingTransition(false);
-      setPlaybackStatus("Following the table action…");
-      return "completed";
-    },
-    [cancelPlayback],
-  );
-
-  const skipPlayback = useCallback(() => {
-    const final = playbackFinalRef.current;
-    const current = displayedSituationRef.current;
-    if (!final || !current) return;
-    cancelPlayback({
-      renderFinal: true,
-      message: describeTransitionCatchUp(current, final),
-    });
-  }, [cancelPlayback]);
-
   const handleSuggestion = useCallback(
     (next: AgentSuggestion) => {
-      if (!situation || playbackActiveRef.current || isSubmitting) return;
+      if (!situation || isSubmitting) return;
       if (!isSuggestionCurrent(situation, next)) return;
       clearRecommendationReceipt();
       setSuggestion(next);
@@ -529,14 +355,11 @@ export function PocketPrototype() {
     situation,
     handHistory: situation?.recentActions ?? [],
     onSuggestion: handleSuggestion,
-    interactionLocked: isSubmitting || isPlayingTransition,
+    interactionLocked: isSubmitting,
   });
 
   const loadEngineSituation = useCallback(
     async (options: { keepMessage?: boolean } = {}) => {
-      // Read this before the first await so concurrent Strict Mode loads retain
-      // the same interrupted-playback marker until either response reconciles.
-      const playbackMarker = readPlaybackMarker();
       try {
         await ensureSupabaseBrowserIdentity();
       } catch (error) {
@@ -570,75 +393,71 @@ export function PocketPrototype() {
         next = await requestSituation(url);
       }
 
-      const previous = displayedSituationRef.current;
-      const interruptedPlayback = playbackActiveRef.current;
-      const recoveredPlayback =
-        playbackMarker?.gameId === next.gameId &&
-        next.stateVersion >= playbackMarker.finalStateVersion;
-      cancelPlayback();
-      authoritativeSituationRef.current = next;
-      displayedSituationRef.current = next;
+      situationRef.current = next;
       setSituation(next);
       setMode("engine");
       setIsPracticeFallback(false);
       if (!options.keepMessage) {
         setTableMessage(
-          recoveredPlayback || interruptedPlayback
-            ? describeTransitionCatchUp(previous ?? next, next)
-            : next.gameResult || next.handResult
-              ? resultMessage(next)
-              : null,
+          next.gameResult || next.handResult ? resultMessage(next) : null,
         );
       }
       return next;
     },
-    [cancelPlayback],
+    [],
   );
 
-  const advanceEngineBots = useCallback(
-    async (starting: PokerSituation) => {
-      if (isSubmitting || playbackActiveRef.current) return;
-      setIsSubmitting(true);
-      const actor = starting.players.find(
-        (player) => player.id === starting.currentActorId,
+  const advanceEngineBot = useCallback(
+    async (starting: PokerSituation, signal: AbortSignal) => {
+      const transition = await requestTransition(
+        demoApiUrl("/api/games/demo/advance", judgeRunRef.current),
+        {
+          method: "POST",
+          signal,
+          body: JSON.stringify({
+            expectedStateVersion: starting.stateVersion,
+          }),
+        },
       );
-      setTableMessage(
-        actor
-          ? `Cards are dealt. ${actor.displayName} is first to act…`
-          : "Following the opening action…",
-      );
+      if (signal.aborted) return;
 
+      const next = transition.situation;
+      const previous = situationRef.current ?? starting;
+      if (next.stateVersion <= previous.stateVersion) return;
+      situationRef.current = next;
+      setSituation(next);
+      setTableMessage(describeTransitionFrame(previous, next));
+    },
+    [],
+  );
+
+  const handleBotAdvanceError = useCallback(
+    async (error: unknown) => {
+      setTableMessage(
+        error instanceof Error
+          ? error.message
+          : "Pocket could not advance the bot action.",
+      );
       try {
-        const transition = await requestTransition(
-          demoApiUrl("/api/games/demo/advance", judgeRunRef.current),
-          {
-            method: "POST",
-            body: JSON.stringify({
-              expectedStateVersion: starting.stateVersion,
-            }),
-          },
-        );
-        const playback = await presentTransition(transition);
-        if (playback === "completed" && transition.situation.isYourTurn) {
-          setTableMessage(null);
-        }
-      } catch (error) {
-        setTableMessage(
-          error instanceof Error
-            ? error.message
-            : "Pocket could not follow the opening action.",
-        );
-        try {
-          await loadEngineSituation({ keepMessage: true });
-        } catch {
-          // Keep the newest player-safe frame visible if refresh also fails.
-        }
-      } finally {
-        setIsSubmitting(false);
+        await loadEngineSituation({ keepMessage: true });
+      } catch {
+        // Keep the newest player-safe state visible if refresh also fails.
       }
     },
-    [isSubmitting, loadEngineSituation, presentTransition],
+    [loadEngineSituation],
   );
+
+  const {
+    currentBot,
+    isBotTurn,
+    skipToHuman,
+    cancelPacing,
+  } = useBotPacing({
+    situation,
+    enabled: mode === "engine" && !isSubmitting,
+    advance: advanceEngineBot,
+    onError: handleBotAdvanceError,
+  });
 
   useEffect(() => {
     let active = true;
@@ -668,29 +487,6 @@ export function PocketPrototype() {
       active = false;
     };
   }, [loadEngineSituation]);
-
-  useEffect(() => {
-    if (
-      mode !== "engine" ||
-      !situation ||
-      situation.isYourTurn ||
-      situation.handResult ||
-      situation.gameResult ||
-      isSubmitting ||
-      isPlayingTransition ||
-      botAdvanceVersionRef.current === situation.stateVersion
-    ) {
-      return;
-    }
-
-    const actor = situation.players.find(
-      (player) => player.id === situation.currentActorId,
-    );
-    if (!actor?.isBot) return;
-
-    botAdvanceVersionRef.current = situation.stateVersion;
-    void advanceEngineBots(situation);
-  }, [advanceEngineBots, isPlayingTransition, isSubmitting, mode, situation]);
 
   useEffect(() => {
     if (!situation) return;
@@ -739,9 +535,6 @@ export function PocketPrototype() {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
       if (nextHandTimerRef.current) clearTimeout(nextHandTimerRef.current);
-      playbackGenerationRef.current += 1;
-      if (playbackTimerRef.current) clearTimeout(playbackTimerRef.current);
-      playbackResolveRef.current?.();
     };
   }, []);
 
@@ -917,17 +710,16 @@ export function PocketPrototype() {
         );
         clearSuggestion();
         acceptRecommendationReceipt(receipt);
-        const playback = await presentTransition(transition);
-        if (playback === "completed") {
-          const next = transition.situation;
-          setTableMessage(
-            next.handResult
-              ? next.gameResult
-                ? resultMessage(next)
-                : `${resultMessage(next)} The next hand starts shortly.`
-              : null,
-          );
-        }
+        const next = transition.situation;
+        situationRef.current = next;
+        setSituation(next);
+        setTableMessage(
+          next.handResult
+            ? next.gameResult
+              ? resultMessage(next)
+              : `${resultMessage(next)} The next hand starts shortly.`
+            : actionPendingMessage(receipt),
+        );
       } catch (error) {
         setTableMessage(
           error instanceof Error ? error.message : "The action was rejected.",
@@ -946,7 +738,6 @@ export function PocketPrototype() {
       clearSuggestion,
       isSubmitting,
       loadEngineSituation,
-      presentTransition,
       situation,
     ],
   );
@@ -1012,6 +803,7 @@ export function PocketPrototype() {
   const startNextEngineHand = useCallback(async () => {
     if (!situation || mode !== "engine" || isSubmitting) return;
     if (nextHandTimerRef.current) clearTimeout(nextHandTimerRef.current);
+    cancelPacing();
     clearSuggestion();
     setIsSubmitting(true);
     setTableMessage("Dealing the next hand…");
@@ -1023,8 +815,16 @@ export function PocketPrototype() {
           body: JSON.stringify({ expectedStateVersion: situation.stateVersion }),
         },
       );
-      const playback = await presentTransition(transition);
-      if (playback === "completed") setTableMessage(null);
+      situationRef.current = transition.situation;
+      setSituation(transition.situation);
+      const actor = transition.situation.players.find(
+        (player) => player.id === transition.situation.currentActorId,
+      );
+      setTableMessage(
+        actor?.isBot
+          ? `Cards are dealt. ${actor.displayName} is first to act…`
+          : null,
+      );
     } catch (error) {
       setTableMessage(
         error instanceof Error ? error.message : "The next hand could not start.",
@@ -1038,11 +838,11 @@ export function PocketPrototype() {
       setIsSubmitting(false);
     }
   }, [
+    cancelPacing,
     clearSuggestion,
     isSubmitting,
     loadEngineSituation,
     mode,
-    presentTransition,
     situation,
   ]);
 
@@ -1070,6 +870,7 @@ export function PocketPrototype() {
   const restartEngineGame = useCallback(async () => {
     if (!situation?.gameResult || mode !== "engine" || isSubmitting) return;
     if (nextHandTimerRef.current) clearTimeout(nextHandTimerRef.current);
+    cancelPacing();
     clearSuggestion();
     setIsSubmitting(true);
     setTableMessage("Resetting the table…");
@@ -1083,10 +884,17 @@ export function PocketPrototype() {
         },
       );
       autoNextHandVersionRef.current = null;
-      botAdvanceVersionRef.current = null;
       clearRecommendationReceipt();
-      const playback = await presentTransition(transition);
-      if (playback === "completed") setTableMessage(null);
+      situationRef.current = transition.situation;
+      setSituation(transition.situation);
+      const actor = transition.situation.players.find(
+        (player) => player.id === transition.situation.currentActorId,
+      );
+      setTableMessage(
+        actor?.isBot
+          ? `Cards are dealt. ${actor.displayName} is first to act…`
+          : null,
+      );
     } catch (error) {
       setTableMessage(
         error instanceof Error ? error.message : "The table could not restart.",
@@ -1100,19 +908,19 @@ export function PocketPrototype() {
       setIsSubmitting(false);
     }
   }, [
+    cancelPacing,
     clearRecommendationReceipt,
     clearSuggestion,
     isSubmitting,
     loadEngineSituation,
     mode,
-    presentTransition,
     situation,
   ]);
 
   async function resetMockDemo() {
     if (timerRef.current) clearTimeout(timerRef.current);
     if (nextHandTimerRef.current) clearTimeout(nextHandTimerRef.current);
-    cancelPlayback();
+    cancelPacing();
     clearSuggestion();
 
     if (mode === "mock") {
@@ -1175,15 +983,7 @@ export function PocketPrototype() {
     isRecommendationReceiptCurrent(situation, recommendationReceipt)
       ? recommendationReceipt
       : null;
-  const turnTitle = isPlayingTransition
-    ? situation.handResult
-      ? "Settling the hand"
-      : situation.isYourTurn
-        ? "Your turn is next"
-        : currentPlayer
-          ? `${currentPlayer.displayName} is acting`
-          : "Following the action"
-    : isSubmitting
+  const turnTitle = isSubmitting
       ? currentPlayer && !situation.isYourTurn
         ? `${currentPlayer.displayName} is acting`
         : situation.handResult
@@ -1210,7 +1010,7 @@ export function PocketPrototype() {
       ? visibleReceipt.outcome === "followed"
         ? "Recommendation followed"
         : "Recommendation overridden"
-      : isPlayingTransition
+      : isBotTurn
         ? "Following table action"
         : supportState === "available"
           ? "Waiting for your turn"
@@ -1275,10 +1075,14 @@ export function PocketPrototype() {
                   : null
             }
             playback={
-              isPlayingTransition
+              isBotTurn
                 ? {
-                    status: playbackStatus,
-                    onSkip: skipPlayback,
+                    status:
+                      tableMessage ??
+                      (currentBot
+                        ? `${currentBot.displayName} is considering the next action…`
+                        : "Following the table action…"),
+                    onSkip: skipToHuman,
                   }
                 : null
             }
@@ -1309,8 +1113,8 @@ export function PocketPrototype() {
             supportState={supportState}
             activity={activity}
             registrationError={registrationError}
-            isSubmitting={isSubmitting || isPlayingTransition}
-            isPlayingTransition={isPlayingTransition}
+            isSubmitting={isSubmitting || isBotTurn}
+            isPlayingTransition={isBotTurn}
             onDismiss={() => {
               clearSuggestion();
               setTableMessage("Suggestion dismissed. Choose any legal action.");

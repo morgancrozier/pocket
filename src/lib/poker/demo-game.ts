@@ -91,7 +91,7 @@ export class DemoGameError extends Error {
 
 export interface DemoGameService {
   getSituation(viewerId: string): Promise<PokerSituation>;
-  advanceBots(input: {
+  advanceBot(input: {
     actorId: string;
     expectedStateVersion: number;
   }): Promise<PokerTransitionResult>;
@@ -177,40 +177,32 @@ interface AuthoritativeTransition {
   frames: AuthoritativePokerState[];
 }
 
-function runBotsUntilHeroOrSettlement(
-  initial: AuthoritativePokerState,
+function advanceOneBot(
+  state: AuthoritativePokerState,
   chooseBotIntent: (decision: ServerPokerDecision) => PokerActionIntent,
-  initialFrames: AuthoritativePokerState[] = [],
 ): AuthoritativeTransition {
-  let state = initial;
-  const frames = [...initialFrames];
-
-  for (let guard = 0; guard < 100; guard += 1) {
-    const decision = getCurrentDecision(state);
-    if (!decision.actorId || decision.actorId === DEMO_HERO_ID) {
-      return { state, frames };
-    }
-
-    const actor = ensureKnownPlayer(decision.actorId);
-    if (!actor.isBot) {
-      throw new DemoGameError(
-        "INVALID_STATE",
-        "The demo stopped on an unexpected non-bot actor.",
-      );
-    }
-
-    state = applyAuthoritativeAction(
-      state,
-      actor.id,
-      chooseBotIntent(decision),
+  const decision = getCurrentDecision(state);
+  if (!decision.actorId || decision.actorId === DEMO_HERO_ID) {
+    throw new DemoGameError(
+      "OUT_OF_TURN",
+      "The table is already waiting for the human player.",
     );
-    frames.push(state);
   }
 
-  throw new DemoGameError(
-    "INVALID_STATE",
-    "The bot loop did not reach the human or settle within 100 actions.",
+  const actor = ensureKnownPlayer(decision.actorId);
+  if (!actor.isBot) {
+    throw new DemoGameError(
+      "INVALID_STATE",
+      "The demo stopped on an unexpected non-bot actor.",
+    );
+  }
+
+  const next = applyAuthoritativeAction(
+    state,
+    actor.id,
+    chooseBotIntent(decision),
   );
+  return { state: next, frames: [next] };
 }
 
 export function createDemoGame(
@@ -238,16 +230,13 @@ export function createDemoGame(
   }
 
   function createInitialState(): AuthoritativePokerState {
-    const initial = createAuthoritativeGame({
+    return createAuthoritativeGame({
       gameId,
       players: DEMO_PLAYERS,
       deterministicSeed: options.judgeDemo
         ? JUDGE_DEMO_SEED
         : options.deterministicSeed,
     });
-    return options.judgeDemo
-      ? initial
-      : runBotsUntilHeroOrSettlement(initial, chooseBotIntent).state;
   }
 
   async function loadOrCreate(): Promise<StoredDemoGame> {
@@ -359,24 +348,12 @@ export function createDemoGame(
       return projectAuthoritativeGame(restoreRecord(stored), viewerId);
     },
 
-    async advanceBots({ actorId, expectedStateVersion }) {
+    async advanceBot({ actorId, expectedStateVersion }) {
       ensureKnownPlayer(actorId);
 
       return mutate(
         expectedStateVersion,
-        (authoritative) => {
-          const decision = getCurrentDecision(authoritative);
-          if (!decision.actorId || decision.actorId === DEMO_HERO_ID) {
-            throw new DemoGameError(
-              "OUT_OF_TURN",
-              "The table is already waiting for the human player.",
-            );
-          }
-          return runBotsUntilHeroOrSettlement(
-            authoritative,
-            chooseBotIntent,
-          );
-        },
+        (authoritative) => advanceOneBot(authoritative, chooseBotIntent),
         actorId,
       );
     },
@@ -400,11 +377,7 @@ export function createDemoGame(
             actorId,
             intent,
           );
-          return runBotsUntilHeroOrSettlement(
-            afterHuman,
-            chooseBotIntent,
-            [afterHuman],
-          );
+          return { state: afterHuman, frames: [afterHuman] };
         },
         actorId,
       );
@@ -444,7 +417,7 @@ export function createDemoGame(
             deterministicSeed: seed,
             ...blindLevelForHand(nextHandNumber),
           });
-          return runBotsUntilHeroOrSettlement(next, chooseBotIntent, [next]);
+          return { state: next, frames: [next] };
         },
         actorId,
       );
@@ -471,11 +444,7 @@ export function createDemoGame(
               ? JUDGE_DEMO_SEED
               : options.deterministicSeed,
           );
-          return runBotsUntilHeroOrSettlement(
-            restarted,
-            chooseBotIntent,
-            [restarted],
-          );
+          return { state: restarted, frames: [restarted] };
         },
         actorId,
       );

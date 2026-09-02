@@ -102,7 +102,7 @@ through the durable demo.
   showdown hands, but never the deck or folded/hidden opponent cards.
 - `get_current_situation` registered through WebMCP.
 - `get_hand_history` registered through WebMCP.
-- `stage_recommendation` registered only while it is the human's turn.
+- `stage_recommendation` remains registered with the table and validates the current turn when called.
 - `stage_recommendation` updates the visible table but never plays the move.
 - `stage_recommendation` requires the exact `stateVersion` returned by the current
   situation read and rejects stale or no-longer-legal advice.

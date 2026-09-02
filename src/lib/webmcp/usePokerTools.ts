@@ -31,9 +31,9 @@ interface UsePokerToolsInput {
   situation: PokerSituation | null;
   handHistory: HandActionEvent[];
   onSuggestion: (suggestion: AgentSuggestion) => void;
+  registrationEnabled?: boolean;
   roomPhase?: RoomPhase;
   viewerStatus?: RoomViewerStatus;
-  observedRevision?: number;
   isRevisionCurrent?: () => boolean;
   interactionLocked?: boolean;
 }
@@ -50,9 +50,9 @@ export function usePokerTools({
   situation,
   handHistory,
   onSuggestion,
+  registrationEnabled = true,
   roomPhase,
   viewerStatus = "seated",
-  observedRevision,
   isRevisionCurrent,
   interactionLocked = false,
 }: UsePokerToolsInput) {
@@ -68,6 +68,9 @@ export function usePokerTools({
   const historyRef = useRef(handHistory);
   const suggestionHandlerRef = useRef(onSuggestion);
   const revisionCurrentRef = useRef(isRevisionCurrent);
+  const interactionLockedRef = useRef(interactionLocked);
+  const roomPhaseRef = useRef(roomPhase);
+  const viewerStatusRef = useRef(viewerStatus);
   const [activity, setActivity] = useState<PokerToolActivityState>({
     activeTool: null,
     latest: null,
@@ -77,6 +80,9 @@ export function usePokerTools({
   historyRef.current = handHistory;
   suggestionHandlerRef.current = onSuggestion;
   revisionCurrentRef.current = isRevisionCurrent;
+  interactionLockedRef.current = interactionLocked;
+  roomPhaseRef.current = roomPhase;
+  viewerStatusRef.current = viewerStatus;
 
   const recordActivity = useCallback((event: PokerToolActivityEvent) => {
     if (event.phase === "started") {
@@ -95,24 +101,15 @@ export function usePokerTools({
     }));
   }, []);
 
-  const hasSituation = situation !== null;
-  const isYourTurn = situation?.isYourTurn ?? false;
-  const isTerminal = Boolean(situation?.gameResult);
   const handNumber = situation?.handNumber;
   const stateVersion = situation?.stateVersion;
-  const canSuggest =
-    (observedRevision === undefined ||
-      (stateVersion !== undefined && stateVersion >= observedRevision)) &&
-    viewerStatus === "seated" &&
-    !interactionLocked &&
-    (roomPhase === undefined || roomPhase === "active");
 
   useEffect(() => {
     setActivity({ activeTool: null, latest: null });
   }, [situation?.gameId, handNumber, stateVersion]);
 
   useEffect(() => {
-    if (!hasSituation) {
+    if (!registrationEnabled) {
       setAvailabilityState("checking");
       setReadRegistrationError(null);
       return;
@@ -134,12 +131,16 @@ export function usePokerTools({
           getHandHistory: () => historyRef.current,
           onActivity: recordActivity,
           getRoomContext: () =>
-            roomPhase
-              ? { roomPhase, viewerStatus }
+            roomPhaseRef.current
+              ? {
+                  roomPhase: roomPhaseRef.current,
+                  viewerStatus: viewerStatusRef.current,
+                }
               : null,
         });
 
         for (const tool of tools) {
+          if (controller.signal.aborted) return;
           await document.modelContext.registerTool(tool, {
             signal: controller.signal,
           });
@@ -166,16 +167,15 @@ export function usePokerTools({
       active = false;
       controller.abort();
     };
-  }, [hasSituation, roomPhase, viewerStatus]);
+  }, [recordActivity, registrationEnabled]);
 
   useEffect(() => {
-    if (
-      !hasSituation ||
-      !isYourTurn ||
-      isTerminal ||
-      !canSuggest ||
-      !hasWebMCP()
-    ) {
+    if (!registrationEnabled) {
+      setSuggestionRegistrationError(null);
+      return;
+    }
+
+    if (!hasWebMCP()) {
       setSuggestionRegistrationError(null);
       return;
     }
@@ -191,6 +191,7 @@ export function usePokerTools({
             suggestionHandlerRef.current(suggestion),
           onActivity: recordActivity,
           isRevisionCurrent: () => revisionCurrentRef.current?.() ?? true,
+          isInteractionLocked: () => interactionLockedRef.current,
         });
 
         await document.modelContext.registerTool(tool, {
@@ -213,16 +214,7 @@ export function usePokerTools({
       active = false;
       controller.abort();
     };
-  }, [
-    canSuggest,
-    hasSituation,
-    isYourTurn,
-    isTerminal,
-    interactionLocked,
-    handNumber,
-    observedRevision,
-    stateVersion,
-  ]);
+  }, [recordActivity, registrationEnabled]);
 
   const registrationError =
     suggestionRegistrationError ?? readRegistrationError;
