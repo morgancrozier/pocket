@@ -10,7 +10,7 @@ import {
 import type { PokerActionIntent, PokerSituation } from "@/types/poker";
 import {
   createReadPokerTools,
-  createSuggestActionTool,
+  createStageRecommendationTool,
 } from "./poker-tools";
 
 function playersWithHeroAt(
@@ -550,7 +550,7 @@ describe("authoritative WebMCP poker contract scenarios", () => {
     let state = createGame(players, "stale-version");
     let situation = projectAuthoritativeGame(state, "hero");
     const originalVersion = situation.stateVersion;
-    const tool = createSuggestActionTool({
+    const tool = createStageRecommendationTool({
       getSituation: () => situation,
       onSuggestion: vi.fn(),
     });
@@ -576,7 +576,7 @@ describe("authoritative WebMCP poker contract scenarios", () => {
     let state = createGame(players, "suggestion-rejections");
     let situation: PokerSituation = projectAuthoritativeGame(state, "hero");
     const onSuggestion = vi.fn();
-    const tool = createSuggestActionTool({
+    const tool = createStageRecommendationTool({
       getSituation: () => situation,
       onSuggestion,
     });
@@ -659,7 +659,7 @@ describe("authoritative WebMCP poker contract scenarios", () => {
       getSituation: () => payload.situation,
       getHandHistory: () => payload.situation.recentActions,
     });
-    const suggestionTool = createSuggestActionTool({
+    const suggestionTool = createStageRecommendationTool({
       getSituation: () => payload.situation,
       onSuggestion: vi.fn(),
     });

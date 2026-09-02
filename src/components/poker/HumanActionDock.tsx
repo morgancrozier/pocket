@@ -111,6 +111,12 @@ export function HumanActionDock({
   const sizedActionLabel = selectedAmount
     ? `${sizingLabel} ${selectedAmount}${allInOnly ? " · All-in" : ""}`
     : `${sizingLabel} —`;
+  const sizedActionIsRecommended = Boolean(
+    recommendation &&
+      sizedAction &&
+      recommendation.action === sizedAction.type &&
+      recommendation.amount === selectedAmount,
+  );
 
   function selectAmount(amount: number) {
     if (!hasSizingBounds) return;
@@ -282,31 +288,40 @@ export function HumanActionDock({
                   (PASSIVE_ACTION_ORDER[left.type] ?? 2) -
                   (PASSIVE_ACTION_ORDER[right.type] ?? 2),
               )
-              .map((action) => (
-                <button
-                  key={action.type}
-                  className={`action-button action-${action.type}`}
-                  data-recommended={
-                    recommendation?.action === action.type || undefined
-                  }
-                  type="button"
-                  disabled={actionsDisabled}
-                  onClick={() => onCommit(action.type, action.amount)}
-                >
-                  {actionLabel(action)}
-                </button>
-              ))}
+              .map((action) => {
+                const isRecommended = recommendation?.action === action.type;
+                return (
+                  <button
+                    key={action.type}
+                    className={`action-button action-${action.type}`}
+                    data-recommended={isRecommended || undefined}
+                    type="button"
+                    disabled={actionsDisabled}
+                    onClick={() => onCommit(action.type, action.amount)}
+                  >
+                    <span>{actionLabel(action)}</span>
+                    {isRecommended ? (
+                      <span className="agent-pick-label" aria-hidden="true">
+                        Agent pick
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
 
             {sizedAction ? (
               <button
                 type="submit"
                 className={`action-button action-${sizedAction.type}`}
-                data-recommended={
-                  recommendation?.action === sizedAction.type || undefined
-                }
+                data-recommended={sizedActionIsRecommended || undefined}
                 disabled={actionsDisabled || selectedAmount === null}
               >
-                {sizedActionLabel}
+                <span>{sizedActionLabel}</span>
+                {sizedActionIsRecommended ? (
+                  <span className="agent-pick-label" aria-hidden="true">
+                    Agent pick
+                  </span>
+                ) : null}
               </button>
             ) : null}
 

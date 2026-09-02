@@ -144,8 +144,6 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
     "connecting" | "live" | "fallback"
   >("connecting");
   const [suggestion, setSuggestion] = useState<AgentSuggestion | null>(null);
-  const [staleSuggestion, setStaleSuggestion] =
-    useState<AgentSuggestion | null>(null);
   const [receipt, setReceipt] = useState<RecommendationReceipt | null>(null);
   const [suggestionRevision, setSuggestionRevision] = useState(0);
   const [betDraft, setBetDraft] = useState("");
@@ -156,17 +154,9 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const highestObservedRevisionRef = useRef(0);
   const advanceRevisionRef = useRef<number | null>(null);
-  const suggestionRef = useRef<AgentSuggestion | null>(null);
-  suggestionRef.current = suggestion;
-
   const situation = room && room.phase !== "waiting" ? room.situation : null;
 
-  const clearSuggestion = useCallback((preserveAsStale = false) => {
-    if (preserveAsStale && suggestionRef.current) {
-      setStaleSuggestion(suggestionRef.current);
-    } else if (!preserveAsStale) {
-      setStaleSuggestion(null);
-    }
+  const clearSuggestion = useCallback(() => {
     sessionStorage.removeItem(AGENT_SUGGESTION_STORAGE_KEY);
     setSuggestion(null);
   }, []);
@@ -183,7 +173,7 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
         return;
       }
       if (current?.gameId === next.gameId && next.revision > current.revision) {
-        clearSuggestion(true);
+        clearSuggestion();
       }
       highestObservedRevisionRef.current = Math.max(
         highestObservedRevisionRef.current,
@@ -277,7 +267,7 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
                 setHighestObservedRevision((current) =>
                   Math.max(current, revision),
                 );
-                clearSuggestion(true);
+                clearSuggestion();
                 void refreshRoom();
               }
             },
@@ -362,7 +352,6 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
     (next: AgentSuggestion) => {
       if (!situation || !isSuggestionCurrent(situation, next)) return;
       clearReceipt();
-      setStaleSuggestion(null);
       setSuggestion(next);
       setSuggestionRevision((value) => value + 1);
       setMessage("Your copilot placed a current recommendation at this seat.");
@@ -397,6 +386,34 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
     );
     setBetError(null);
   }, [situation?.stateVersion, sizedAction?.type, sizedAction?.minTotal]);
+
+  useEffect(() => {
+    if (
+      !situation ||
+      !suggestion ||
+      suggestion.handNumber !== situation.handNumber ||
+      suggestion.stateVersion !== situation.stateVersion
+    ) {
+      return;
+    }
+    if (
+      sizedAction &&
+      suggestion.action === sizedAction.type &&
+      typeof suggestion.amount === "number"
+    ) {
+      setBetDraft(String(suggestion.amount));
+      setBetError(null);
+    }
+  }, [
+    situation?.handNumber,
+    situation?.stateVersion,
+    sizedAction?.type,
+    suggestion?.action,
+    suggestion?.amount,
+    suggestion?.handNumber,
+    suggestion?.stateVersion,
+    suggestionRevision,
+  ]);
 
   async function joinRoom(event: React.FormEvent) {
     event.preventDefault();
@@ -799,14 +816,17 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
   );
   const railRecommendationLabel = visibleSuggestion
     ? titleCase(describeAction(visibleSuggestion.action, visibleSuggestion.amount))
-    : visibleReceipt
+    : !isSpectating &&
+        playing.situation.isYourTurn &&
+        !playing.situation.handResult &&
+        !playing.situation.gameResult
+      ? "Ready for your agent"
+      : visibleReceipt
       ? visibleReceipt.outcome === "followed"
         ? "Recommendation followed"
         : "Recommendation overridden"
-      : staleSuggestion
-        ? "Recommendation expired"
-        : supportState === "available"
-          ? "Awaiting a recommendation"
+      : supportState === "available"
+          ? "Waiting for your turn"
           : supportState === "unavailable"
             ? "Copilot unavailable"
             : supportState === "error"
@@ -862,12 +882,9 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
                 ? `suggestion-${suggestionRevision}`
                 : visibleReceipt
                   ? `receipt-${visibleReceipt.sourceStateVersion}`
-                  : staleSuggestion
-                    ? `stale-${staleSuggestion.stateVersion}`
-                    : `empty-${supportState}-${playing.viewer.status}`
+                  : `empty-${supportState}-${playing.viewer.status}`
             }
             suggestion={visibleSuggestion}
-            staleSuggestion={staleSuggestion}
             receipt={visibleReceipt}
             situation={playing.situation}
             supportState={supportState}

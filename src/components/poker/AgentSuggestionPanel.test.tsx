@@ -6,7 +6,7 @@ import type { PokerToolActivityState } from "@/lib/webmcp/usePokerTools";
 
 const idleActivity: PokerToolActivityState = {
   activeTool: null,
-  receipts: [],
+  latest: null,
 };
 
 function renderPanel(
@@ -31,7 +31,7 @@ describe("AgentSuggestionPanel", () => {
     const html = renderPanel();
 
     expect(html).toContain("Ready for your agent");
-    expect(html).toContain("recommend one legal action");
+    expect(html).toContain("Ask your agent: What should I do?");
     expect(html).toContain("Recommendations never execute a poker action");
     expect(html).not.toContain("copilot-onboarding-steps");
   });
@@ -41,23 +41,25 @@ describe("AgentSuggestionPanel", () => {
 
     expect(html).toContain("WebMCP unavailable");
     expect(html).not.toContain("tools registered");
-    expect(html).toContain("Awaiting a recommendation");
+    expect(html).toContain("Agent connection unavailable");
   });
 
-  it("marks an older version-bound recommendation as stale", () => {
+  it("prominently presents a staged recommendation and its concise rationale", () => {
     const html = renderPanel({
-      staleSuggestion: {
+      suggestion: {
         handNumber: INITIAL_SITUATION.handNumber,
-        stateVersion: INITIAL_SITUATION.stateVersion - 1,
+        stateVersion: INITIAL_SITUATION.stateVersion,
         action: "raise",
         amount: 64,
+        rationale: "Top pair can value-raise within the legal range.",
+        stagedAt: 1_777_777_777_777,
       },
     });
 
-    expect(html).toContain("Recommendation expired");
+    expect(html).toContain("Agent recommends");
     expect(html).toContain("Raise to 64");
-    expect(html).toContain("The table changed after this advice");
-    expect(html).not.toContain("Use Raise to 64");
+    expect(html).toContain("Top pair can value-raise within the legal range.");
+    expect(html).toContain("Suggestion only — no action taken.");
   });
 
   it("shows a structured rejection without replacing current advice", () => {
@@ -67,24 +69,38 @@ describe("AgentSuggestionPanel", () => {
         stateVersion: INITIAL_SITUATION.stateVersion,
         action: "call",
         confidence: 0.7,
+        stagedAt: 1_777_777_777_777,
       },
       activity: {
         activeTool: null,
-        receipts: [
-          {
-            id: 1,
-            tool: "suggest_action",
-            status: "rejected",
-            message: "Minimum total for raise is 64.",
-          },
-        ],
+        latest: {
+          tool: "stage_recommendation",
+          status: "rejected",
+          message: "Minimum total for raise is 64.",
+        },
       },
     });
 
-    expect(html).toContain("Recommendation");
+    expect(html).toContain("Agent recommends");
     expect(html).not.toContain("Ready for your agent");
-    expect(html).toContain("Latest suggestion was rejected");
+    expect(html).toContain("Latest recommendation was rejected");
     expect(html).toContain("Minimum total for raise is 64.");
+  });
+
+  it("shows one read status instead of accumulating a checklist", () => {
+    const html = renderPanel({
+      activity: {
+        activeTool: null,
+        latest: {
+          tool: "get_current_situation",
+          status: "completed",
+        },
+      },
+    });
+
+    expect(html).toContain("Hand read by your agent");
+    expect(html).not.toContain("Recent WebMCP activity");
+    expect(html.match(/copilot-activity/g)).toHaveLength(1);
   });
 });
 

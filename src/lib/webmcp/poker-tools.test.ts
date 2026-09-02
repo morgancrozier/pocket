@@ -7,9 +7,9 @@ import type {
 import { INITIAL_SITUATION } from "@/lib/poker/mock-state";
 import {
   createReadPokerTools,
-  createSuggestActionTool,
+  createStageRecommendationTool,
   RECOMMENDATION_ACTIONS,
-  SUGGESTION_CONFIRMATION_MESSAGE,
+  RECOMMENDATION_CONFIRMATION_MESSAGE,
 } from "./poker-tools";
 
 function createSituation(
@@ -100,7 +100,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("createSuggestActionTool", () => {
+describe("createStageRecommendationTool", () => {
   it("places a version-bound recommendation without changing game state or calling an action path", async () => {
     let situation = createSituation();
     const serializedBefore = JSON.stringify(situation);
@@ -108,7 +108,7 @@ describe("createSuggestActionTool", () => {
     const actionRequest = vi.fn();
     vi.stubGlobal("fetch", actionRequest);
 
-    const tool = createSuggestActionTool({
+    const tool = createStageRecommendationTool({
       getSituation: () => situation,
       onSuggestion,
     });
@@ -118,6 +118,7 @@ describe("createSuggestActionTool", () => {
         amount: 80,
         stateVersion: 4,
         confidence: 0.74,
+        rationale: "  Strong top pair; use the legal value range.  ",
       }),
     );
 
@@ -128,18 +129,22 @@ describe("createSuggestActionTool", () => {
       action: "raise",
       amount: 80,
       confidence: 0.74,
+      rationale: "Strong top pair; use the legal value range.",
+      stagedAt: expect.any(Number),
     });
     expect(JSON.stringify(situation)).toBe(serializedBefore);
     expect(actionRequest).not.toHaveBeenCalled();
     expect(result).toEqual({
       ok: true,
-      message: SUGGESTION_CONFIRMATION_MESSAGE,
+      message: RECOMMENDATION_CONFIRMATION_MESSAGE,
       suggestion: {
         handNumber: 12,
         stateVersion: 4,
         action: "raise",
         amount: 80,
         confidence: 0.74,
+        rationale: "Strong top pair; use the legal value range.",
+        stagedAt: expect.any(Number),
       },
     });
   });
@@ -147,7 +152,7 @@ describe("createSuggestActionTool", () => {
   it("rejects invalid and currently illegal recommendations", async () => {
     const situation = createSituation();
     const onSuggestion = vi.fn();
-    const tool = createSuggestActionTool({
+    const tool = createStageRecommendationTool({
       getSituation: () => situation,
       onSuggestion,
     });
@@ -196,13 +201,25 @@ describe("createSuggestActionTool", () => {
       ok: false,
       error: { code: "INVALID_AMOUNT" },
     });
+    expect(
+      JSON.parse(
+        await tool.execute({
+          action: "call",
+          stateVersion: 4,
+          rationale: "x".repeat(161),
+        }),
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_RATIONALE" },
+    });
     expect(onSuggestion).not.toHaveBeenCalled();
   });
 
   it("rejects a recommendation from an obsolete hand state", async () => {
     let situation = createSituation();
     const onSuggestion = vi.fn();
-    const tool = createSuggestActionTool({
+    const tool = createStageRecommendationTool({
       getSituation: () => situation,
       onSuggestion,
     });
@@ -232,7 +249,7 @@ describe("createSuggestActionTool", () => {
     const situation = createSituation();
     const onSuggestion = vi.fn();
     let revisionIsCurrent = true;
-    const tool = createSuggestActionTool({
+    const tool = createStageRecommendationTool({
       getSituation: () => situation,
       onSuggestion,
       isRevisionCurrent: () => revisionIsCurrent,
@@ -252,7 +269,7 @@ describe("createSuggestActionTool", () => {
   it("rejects a recommendation when it is no longer the hero's turn", async () => {
     let situation = createSituation();
     const onSuggestion = vi.fn();
-    const tool = createSuggestActionTool({
+    const tool = createStageRecommendationTool({
       getSituation: () => situation,
       onSuggestion,
     });
@@ -275,7 +292,7 @@ describe("createSuggestActionTool", () => {
   it("rejects recommendations after a terminal result or restart revision", async () => {
     let situation = createSituation();
     const onSuggestion = vi.fn();
-    const tool = createSuggestActionTool({
+    const tool = createStageRecommendationTool({
       getSituation: () => situation,
       onSuggestion,
     });
@@ -315,7 +332,7 @@ describe("Poker WebMCP definitions", () => {
       getHandHistory: () => situation.recentActions,
       onActivity,
     });
-    const suggestionTool = createSuggestActionTool({
+    const suggestionTool = createStageRecommendationTool({
       getSituation: () => situation,
       onSuggestion: vi.fn(),
       onActivity,
@@ -331,10 +348,10 @@ describe("Poker WebMCP definitions", () => {
     expect(onActivity.mock.calls.map(([event]) => event)).toEqual([
       { phase: "started", tool: "get_current_situation" },
       { phase: "completed", tool: "get_current_situation" },
-      { phase: "started", tool: "suggest_action" },
+      { phase: "started", tool: "stage_recommendation" },
       {
         phase: "rejected",
-        tool: "suggest_action",
+        tool: "stage_recommendation",
         message:
           "Minimum total for raise is 64. amount is the final total committed on this street.",
       },
@@ -566,7 +583,7 @@ describe("Poker WebMCP definitions", () => {
       getSituation: () => situation,
       getHandHistory: () => situation.recentActions,
     });
-    const suggestionTool = createSuggestActionTool({
+    const suggestionTool = createStageRecommendationTool({
       getSituation: () => situation,
       onSuggestion: vi.fn(),
     });
@@ -576,7 +593,7 @@ describe("Poker WebMCP definitions", () => {
     expect(names).toEqual([
       "get_current_situation",
       "get_hand_history",
-      "suggest_action",
+      "stage_recommendation",
     ]);
     for (const forbiddenName of [
       "fold",
@@ -585,6 +602,7 @@ describe("Poker WebMCP definitions", () => {
       "bet",
       "raise",
       "all_in",
+      "apply_action",
       "play_action",
       "auto_play",
       "autoplay",
@@ -616,6 +634,17 @@ describe("Poker WebMCP definitions", () => {
     expect(amountSchema.description).toContain("raise to X, never raise by X");
     expect(stateVersionSchema).toMatchObject({ type: "integer", minimum: 1 });
     expect(stateVersionSchema.description).toContain("get_current_situation");
+    expect(suggestionTool.description).toContain(
+      "After deciding what the player should do",
+    );
+    expect(suggestionTool.description).toContain(
+      "It never executes the poker action",
+    );
+    expect(suggestionTool.inputSchema.properties?.rationale).toMatchObject({
+      type: "string",
+      minLength: 1,
+      maxLength: 160,
+    });
     expect(readTools[0]!.description).toContain("authoritative");
     expect(readTools[0]!.description).toContain(
       "Forced posts are separate from voluntary actions",
@@ -701,7 +730,7 @@ describe("tool activity frames", () => {
     vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
     vi.stubGlobal("document", { visibilityState: "visible" });
     const situation = createSituation();
-    const tool = createSuggestActionTool({
+    const tool = createStageRecommendationTool({
       getSituation: () => situation,
       onSuggestion: vi.fn(),
       onActivity: vi.fn(),

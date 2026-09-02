@@ -285,11 +285,11 @@ async function installWebMCPStub(
         ) {
           if (
             failSuggestionOnce &&
-            tool.name === "suggest_action" &&
+            tool.name === "stage_recommendation" &&
             !suggestionFailed
           ) {
             suggestionFailed = true;
-            throw new Error("suggest_action registration failed for test.");
+            throw new Error("stage_recommendation registration failed for test.");
           }
           tools.set(tool.name, tool);
           options?.signal?.addEventListener(
@@ -324,8 +324,8 @@ async function suggest(
 ) {
   return page.evaluate(async (suggestionInput) => {
     const tools = await document.modelContext.getTools();
-    const suggestion = tools.find((tool) => tool.name === "suggest_action");
-    if (!suggestion) throw new Error("suggest_action was not registered.");
+    const suggestion = tools.find((tool) => tool.name === "stage_recommendation");
+    if (!suggestion) throw new Error("stage_recommendation was not registered.");
     const result = await document.modelContext.executeTool(
       suggestion,
       suggestionInput,
@@ -355,7 +355,7 @@ test("an invalid sized WebMCP recommendation returns recovery and a valid retry 
     const currentSituation = tools.find(
       (tool) => tool.name === "get_current_situation",
     );
-    const suggestion = tools.find((tool) => tool.name === "suggest_action");
+    const suggestion = tools.find((tool) => tool.name === "stage_recommendation");
     if (!currentSituation || !suggestion) {
       throw new Error("Expected WebMCP tools were not registered.");
     }
@@ -374,7 +374,7 @@ test("an invalid sized WebMCP recommendation returns recovery and a valid retry 
   expect(browserContract.toolNames).toEqual([
     "get_current_situation",
     "get_hand_history",
-    "suggest_action",
+    "stage_recommendation",
   ]);
   expect(browserContract.currentDescription).toContain("authoritative");
   expect(browserContract.currentResult).toMatchObject({
@@ -404,7 +404,12 @@ test("an invalid sized WebMCP recommendation returns recovery and a valid retry 
   expect(browserContract.currentResult.context.summary).not.toContain(
     "Theo folded",
   );
-  expect(browserContract.suggestionDescription).toContain("never plays");
+  expect(browserContract.suggestionDescription).toContain(
+    "After deciding what the player should do",
+  );
+  expect(browserContract.suggestionDescription).toContain(
+    "never executes the poker action",
+  );
   expect(browserContract.suggestionInputSchema).toMatchObject({
     required: ["action", "stateVersion"],
     properties: {
@@ -589,7 +594,7 @@ test("authoritative bot frames play in order and can be skipped without another 
         (await document.modelContext.getTools()).map((tool) => tool.name),
       ),
     )
-    .not.toContain("suggest_action");
+    .not.toContain("stage_recommendation");
 
   await expect(page.locator(".playback-status")).toHaveText("Alex bets · 8.");
   await page.getByRole("button", { name: "Skip to your turn" }).click();
@@ -768,7 +773,7 @@ test("safe tournament UI replaces and follows advice through restart", async ({
   ).toBeVisible();
   await expect(page.locator(".player-seat")).toHaveCount(4);
   await page
-    .getByRole("button", { name: /Awaiting a recommendation.*WebMCP tools ready/ })
+    .getByRole("button", { name: /Ready for your agent.*WebMCP tools ready/ })
     .click();
   await expect(page.getByRole("heading", { name: "Ready for your agent" })).toBeVisible();
   await page.locator(".companion-rail-mobile-header button").click();
@@ -864,7 +869,7 @@ test("safe tournament UI replaces and follows advice through restart", async ({
         (await document.modelContext.getTools()).map((tool) => tool.name),
       ),
     )
-    .not.toContain("suggest_action");
+    .not.toContain("stage_recommendation");
 
   await page.locator(".companion-rail-mobile-header button").click();
   await page.getByRole("button", { name: "Play again" }).click();
@@ -875,7 +880,7 @@ test("safe tournament UI replaces and follows advice through restart", async ({
   await expect(page.getByText("Recommendation followed")).toHaveCount(0);
   await expect(
     page.getByRole("button", {
-      name: /Awaiting a recommendation.*WebMCP tools ready/,
+      name: /Ready for your agent.*WebMCP tools ready/,
     }),
   ).toBeVisible();
   expect(restartBodies).toEqual([{ expectedStateVersion: 24 }]);

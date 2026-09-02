@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createReadPokerTools,
-  createSuggestActionTool,
+  createStageRecommendationTool,
   type PokerToolActivityEvent,
 } from "@/lib/webmcp/poker-tools";
 import type {
@@ -17,7 +17,6 @@ import type {
 export type WebMCPSupportState = "checking" | "available" | "unavailable" | "error";
 
 export interface PokerToolActivityReceipt {
-  id: number;
   tool: PokerToolActivityEvent["tool"];
   status: "completed" | "rejected";
   message?: string;
@@ -25,7 +24,7 @@ export interface PokerToolActivityReceipt {
 
 export interface PokerToolActivityState {
   activeTool: PokerToolActivityEvent["tool"] | null;
-  receipts: PokerToolActivityReceipt[];
+  latest: PokerToolActivityReceipt | null;
 }
 
 interface UsePokerToolsInput {
@@ -69,10 +68,9 @@ export function usePokerTools({
   const historyRef = useRef(handHistory);
   const suggestionHandlerRef = useRef(onSuggestion);
   const revisionCurrentRef = useRef(isRevisionCurrent);
-  const activitySequenceRef = useRef(0);
   const [activity, setActivity] = useState<PokerToolActivityState>({
     activeTool: null,
-    receipts: [],
+    latest: null,
   });
 
   situationRef.current = situation;
@@ -86,16 +84,14 @@ export function usePokerTools({
       return;
     }
 
-    activitySequenceRef.current += 1;
     const receipt: PokerToolActivityReceipt = {
-      id: activitySequenceRef.current,
       tool: event.tool,
       status: event.phase,
       message: event.message,
     };
     setActivity((current) => ({
       activeTool: current.activeTool === event.tool ? null : current.activeTool,
-      receipts: [receipt, ...current.receipts].slice(0, 3),
+      latest: receipt,
     }));
   }, []);
 
@@ -110,6 +106,10 @@ export function usePokerTools({
     viewerStatus === "seated" &&
     !interactionLocked &&
     (roomPhase === undefined || roomPhase === "active");
+
+  useEffect(() => {
+    setActivity({ activeTool: null, latest: null });
+  }, [situation?.gameId, handNumber, stateVersion]);
 
   useEffect(() => {
     if (!hasSituation) {
@@ -185,7 +185,7 @@ export function usePokerTools({
 
     async function registerSuggestionTool() {
       try {
-        const tool = createSuggestActionTool({
+        const tool = createStageRecommendationTool({
           getSituation: () => situationRef.current,
           onSuggestion: (suggestion) =>
             suggestionHandlerRef.current(suggestion),
@@ -202,7 +202,7 @@ export function usePokerTools({
         setSuggestionRegistrationError(
           error instanceof Error
             ? error.message
-            : "suggest_action registration failed.",
+            : "stage_recommendation registration failed.",
         );
       }
     }

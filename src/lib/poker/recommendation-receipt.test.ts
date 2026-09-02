@@ -34,6 +34,7 @@ describe("client-only recommendation receipts", () => {
         stateVersion: INITIAL_SITUATION.stateVersion,
         action: "raise",
         amount: 64,
+        stagedAt: 1_777_777_777_777,
       },
       { action: "raise", amount: 64 },
     );
@@ -44,6 +45,7 @@ describe("client-only recommendation receipts", () => {
         stateVersion: INITIAL_SITUATION.stateVersion,
         action: "raise",
         amount: 64,
+        stagedAt: 1_777_777_777_777,
       },
       { action: "call", amount: 32 },
     );
@@ -64,6 +66,7 @@ describe("client-only recommendation receipts", () => {
         handNumber: INITIAL_SITUATION.handNumber,
         stateVersion: INITIAL_SITUATION.stateVersion,
         action: "call",
+        stagedAt: 1_777_777_777_777,
       },
       { action: "call", amount: 32 },
     );
@@ -116,6 +119,7 @@ describe("client-only recommendation receipts", () => {
           handNumber: INITIAL_SITUATION.handNumber,
           stateVersion: INITIAL_SITUATION.stateVersion,
           action: "fold",
+          stagedAt: 1_777_777_777_777,
         },
         { action: "check" },
       ),

@@ -7,7 +7,7 @@ import type {
 
 export const AGENT_SUGGESTION_STORAGE_KEY = "pocket-agent-suggestion";
 
-const STORAGE_VERSION = 1;
+const STORAGE_VERSION = 2;
 const ACTIONS: readonly PokerActionType[] = [
   "fold",
   "check",
@@ -23,6 +23,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function optionalNumber(value: unknown): number | undefined | null {
   if (value === undefined) return undefined;
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function optionalRationale(value: unknown): string | undefined | null {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") return null;
+  const rationale = value.trim().replace(/\s+/g, " ");
+  return rationale && rationale.length <= 160 ? rationale : null;
 }
 
 export function isSuggestionCurrent(
@@ -75,12 +82,16 @@ export function restoreStoredSuggestion(
   const action = ACTIONS.find((value) => value === candidate.action);
   const amount = optionalNumber(candidate.amount);
   const confidence = optionalNumber(candidate.confidence);
+  const rationale = optionalRationale(candidate.rationale);
   if (
     !action ||
     !Number.isSafeInteger(candidate.handNumber) ||
     !Number.isSafeInteger(candidate.stateVersion) ||
     amount === null ||
     confidence === null ||
+    rationale === null ||
+    !Number.isSafeInteger(candidate.stagedAt) ||
+    Number(candidate.stagedAt) < 1 ||
     (typeof confidence === "number" &&
       (confidence < 0 || confidence > 1))
   ) {
@@ -92,7 +103,9 @@ export function restoreStoredSuggestion(
     stateVersion: Number(candidate.stateVersion),
     action,
     amount,
+    rationale,
     confidence,
+    stagedAt: Number(candidate.stagedAt),
   };
 
   return isSuggestionCurrent(situation, suggestion) ? suggestion : null;

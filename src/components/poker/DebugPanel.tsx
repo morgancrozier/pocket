@@ -106,6 +106,7 @@ export function DebugPanel({
       stateVersion: situation.stateVersion,
       action: legal.action,
       amount: legal.amount,
+      stagedAt: Date.now(),
     });
     setOutput(
       "A legal local test recommendation was injected into React state. It did not come from an agent, and no game action was sent.",
@@ -118,7 +119,7 @@ export function DebugPanel({
       setOutput("There is no current human action to recommend.");
       return;
     }
-    void executeTool("suggest_action", suggestion);
+    void executeTool("stage_recommendation", suggestion);
   }
 
   return (
@@ -147,7 +148,7 @@ export function DebugPanel({
               className="debug-button"
               onClick={executeSuggestionTool}
             >
-              Call suggest action
+              Call stage recommendation
             </button>
             <button className="debug-button" onClick={injectFallback}>
               Inject local suggestion

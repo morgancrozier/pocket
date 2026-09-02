@@ -19,16 +19,17 @@ export const RECOMMENDATION_ACTIONS = [
   "raise",
 ] as const satisfies readonly PokerActionType[];
 
-export const SUGGESTION_CONFIRMATION_MESSAGE =
+export const RECOMMENDATION_CONFIRMATION_MESSAGE =
   "The recommendation is visible in Pocket. No poker action was executed; the human still decides.";
 
-export type SuggestionFailureCode =
+export type RecommendationFailureCode =
   | "GAME_COMPLETE"
   | "HAND_COMPLETE"
   | "ILLEGAL_RECOMMENDATION"
   | "INVALID_ACTION"
   | "INVALID_AMOUNT"
   | "INVALID_CONFIDENCE"
+  | "INVALID_RATIONALE"
   | "INVALID_STATE_VERSION"
   | "MISSING_AMOUNT"
   | "NO_SITUATION"
@@ -37,7 +38,10 @@ export type SuggestionFailureCode =
 
 export type PokerToolActivityEvent = {
   phase: "started" | "completed" | "rejected";
-  tool: "get_current_situation" | "get_hand_history" | "suggest_action";
+  tool:
+    | "get_current_situation"
+    | "get_hand_history"
+    | "stage_recommendation";
   message?: string;
 };
 
@@ -56,7 +60,7 @@ interface HandHistoryToolContext extends SituationToolContext {
   getHandHistory: () => HandActionEvent[];
 }
 
-interface SuggestionToolContext extends SituationToolContext {
+interface RecommendationToolContext extends SituationToolContext {
   onSuggestion: (suggestion: AgentSuggestion) => void;
   isRevisionCurrent?: () => boolean;
 }
@@ -151,8 +155,8 @@ function parseAction(value: unknown): PokerActionType | null {
   return RECOMMENDATION_ACTIONS.find((action) => action === value) ?? null;
 }
 
-function suggestionFailure(
-  code: SuggestionFailureCode,
+function recommendationFailure(
+  code: RecommendationFailureCode,
   message: string,
   situation: PokerSituation | null,
 ): string {
@@ -162,7 +166,7 @@ function suggestionFailure(
       code,
       message,
       recovery:
-        "Call get_current_situation again, then submit a recommendation that matches its stateVersion and legalActions.",
+        "Call get_current_situation again, then stage a recommendation that matches its stateVersion and legalActions.",
     },
     current: situation
       ? {
@@ -531,7 +535,7 @@ export function createCurrentSituationTool({
   return {
     name: "get_current_situation",
     description:
-      "Read the authoritative, seat-safe current hand: hero cards, public board, stacks and commitments, action order, pot layers, exact next actor, legal actions, and public history. recentEvents rows follow context.eventFields. Forced posts are separate from voluntary actions. amountToCall is chips to add; bet/raise minTotal and maxTotal are final street totals (raise to X). Re-read after the table changes. suggest_action is available only on the hero's turn.",
+      "Read the authoritative, seat-safe current hand: hero cards, public board, stacks and commitments, action order, pot layers, exact next actor, legal actions, and public history. recentEvents rows follow context.eventFields. Forced posts are separate from voluntary actions. amountToCall is chips to add; bet/raise minTotal and maxTotal are final street totals (raise to X). Re-read after the table changes. stage_recommendation is available only on the hero's turn.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -760,18 +764,18 @@ export function createReadPokerTools(
   ];
 }
 
-export function createSuggestActionTool({
+export function createStageRecommendationTool({
   getSituation,
   onSuggestion,
   isRevisionCurrent,
   onActivity,
-}: SuggestionToolContext): WebMCPTool {
+}: RecommendationToolContext): WebMCPTool {
   requireSituation(getSituation);
 
   return {
-    name: "suggest_action",
+    name: "stage_recommendation",
     description:
-      "Display version-bound advice in Pocket; this tool never plays or executes a poker action. Use the exact stateVersion and a current legal action from get_current_situation. For bet/raise, amount is the final street total (raise to X). The human may use, change, or ignore it.",
+      "After deciding what the player should do, call this tool to display/stage that recommendation inside Pocket. It never executes the poker action. Use the exact stateVersion and a current legal action from get_current_situation. For bet/raise, amount is the final street total (raise to X). The human may use, change, or ignore it.",
     inputSchema: {
       type: "object",
       properties: {
@@ -800,6 +804,13 @@ export function createSuggestActionTool({
           description:
             "Optional confidence from 0 to 1. This is displayed as supporting context, not treated as certainty.",
         },
+        rationale: {
+          type: "string",
+          minLength: 1,
+          maxLength: 160,
+          description:
+            "Optional concise, display-safe reason. Do not include private strategy, personal notes, or sensitive context.",
+        },
       },
       required: ["action", "stateVersion"],
       additionalProperties: false,
@@ -809,21 +820,21 @@ export function createSuggestActionTool({
       untrustedContentHint: false,
     },
     execute: async (input) => {
-      onActivity?.({ phase: "started", tool: "suggest_action" });
+      onActivity?.({ phase: "started", tool: "stage_recommendation" });
       await allowActivityFrame(onActivity);
       const current = getSituation();
 
       const reject = (
-        code: SuggestionFailureCode,
+        code: RecommendationFailureCode,
         message: string,
         activeSituation: PokerSituation | null,
       ) => {
         onActivity?.({
           phase: "rejected",
-          tool: "suggest_action",
+          tool: "stage_recommendation",
           message,
         });
-        return suggestionFailure(code, message, activeSituation);
+        return recommendationFailure(code, message, activeSituation);
       };
 
       if (isRevisionCurrent && !isRevisionCurrent()) {
@@ -866,7 +877,7 @@ export function createSuggestActionTool({
       if (current.gameResult) {
         return reject(
           "GAME_COMPLETE",
-          "The tournament is complete. suggest_action is unavailable until the human starts a new game.",
+          "The tournament is complete. stage_recommendation is unavailable until the human starts a new game.",
           current,
         );
       }
@@ -938,6 +949,29 @@ export function createSuggestActionTool({
       const confidence =
         typeof rawConfidence === "number" ? rawConfidence : undefined;
 
+      const rawRationale = input.rationale;
+      if (rawRationale !== undefined && typeof rawRationale !== "string") {
+        return reject(
+          "INVALID_RATIONALE",
+          "rationale must be a concise display-safe string of at most 160 characters.",
+          current,
+        );
+      }
+      const rationale =
+        typeof rawRationale === "string"
+          ? rawRationale.trim().replace(/\s+/g, " ")
+          : undefined;
+      if (
+        typeof rawRationale === "string" &&
+        (!rationale || rationale.length > 160)
+      ) {
+        return reject(
+          "INVALID_RATIONALE",
+          "rationale must be a concise display-safe string of at most 160 characters.",
+          current,
+        );
+      }
+
       const validation = isSuggestionLegal(current, { action, amount });
 
       if (!validation.ok) {
@@ -955,15 +989,17 @@ export function createSuggestActionTool({
         stateVersion: current.stateVersion,
         action,
         amount,
+        ...(rationale ? { rationale } : {}),
         confidence,
+        stagedAt: Date.now(),
       };
 
       onSuggestion(suggestion);
-      onActivity?.({ phase: "completed", tool: "suggest_action" });
+      onActivity?.({ phase: "completed", tool: "stage_recommendation" });
 
       return JSON.stringify({
         ok: true,
-        message: SUGGESTION_CONFIRMATION_MESSAGE,
+        message: RECOMMENDATION_CONFIRMATION_MESSAGE,
         suggestion,
       });
     },

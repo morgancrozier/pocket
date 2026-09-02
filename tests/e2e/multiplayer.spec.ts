@@ -341,9 +341,9 @@ test("real two-browser room remains seat-safe through spectating and restart", a
       adviceRoom.situation.legalActions.find((action) => action.type === "call") ??
       adviceRoom.situation.legalActions.find((action) => action.type === "fold");
     if (!advice) throw new Error("The current human has no legal advice target.");
-    await expect.poll(() => toolNames(advicePage)).toContain("suggest_action");
+    await expect.poll(() => toolNames(advicePage)).toContain("stage_recommendation");
     const adviceRevision = adviceRoom.revision;
-    await executeTool(advicePage, "suggest_action", {
+    await executeTool(advicePage, "stage_recommendation", {
       action: advice.type,
       stateVersion: adviceRoom.situation.stateVersion,
       confidence: 0.72,

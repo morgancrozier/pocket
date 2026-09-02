@@ -3725,8 +3725,23 @@ h1 {
 }
 
 .human-action-dock .action-button[data-recommended="true"] {
-  border-color: rgba(233, 200, 106, 0.52);
-  box-shadow: inset 0 0 0 1px rgba(233, 200, 106, 0.08);
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  border-color: var(--accent-strong);
+  box-shadow:
+    inset 0 0 0 1px rgba(233, 200, 106, 0.18),
+    0 0 18px rgba(233, 200, 106, 0.08);
+}
+
+.agent-pick-label {
+  color: currentColor;
+  font-size: 0.5rem;
+  font-weight: 820;
+  letter-spacing: 0.09em;
+  line-height: 1;
+  opacity: 0.78;
+  text-transform: uppercase;
 }
 
 .human-action-dock .action-call:not(:disabled),
@@ -3872,11 +3887,6 @@ h1 {
   animation: suggestion-arrive 280ms ease-out;
 }
 
-.copilot-recommendation.is-stale {
-  border-color: var(--border);
-  opacity: 0.72;
-}
-
 .copilot-recommendation.is-error {
   border-color: var(--danger-muted);
   background: var(--danger-soft);
@@ -3918,6 +3928,14 @@ h1 {
   text-transform: uppercase;
 }
 
+.suggestion-rationale {
+  max-width: 48ch;
+  margin: 0;
+  color: var(--muted-strong);
+  font-size: 0.69rem;
+  line-height: 1.5;
+}
+
 .copilot-recommendation.is-current .suggestion-action,
 .copilot-recommendation.receipt-overridden .suggestion-action {
   color: var(--accent-strong);
@@ -3927,11 +3945,6 @@ h1 {
   color: var(--success);
 }
 
-.copilot-recommendation.is-stale .suggestion-action {
-  color: var(--muted-strong);
-}
-
-.suggestion-stale-status,
 .suggestion-error-status {
   padding: 3px 6px;
   border-radius: 4px;
@@ -4007,22 +4020,16 @@ h1 {
 }
 
 .copilot-activity {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.copilot-activity li {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin: 0;
+  padding: 0;
   color: var(--muted-strong);
   font-size: 0.65rem;
 }
 
-.copilot-activity li > span {
+.copilot-activity > span {
   display: grid;
   width: 17px;
   height: 17px;
@@ -4033,16 +4040,16 @@ h1 {
   font-size: 0.58rem;
 }
 
-.copilot-activity li[data-status="rejected"] > span {
+.copilot-activity[data-status="rejected"] > span {
   background: rgba(233, 150, 142, 0.1);
   color: var(--danger);
 }
 
-.copilot-activity li[data-status="active"] {
+.copilot-activity[data-status="active"] {
   color: var(--text);
 }
 
-.copilot-activity li[data-status="active"] > .copilot-activity-active {
+.copilot-activity[data-status="active"] > .copilot-activity-active {
   width: 8px;
   height: 8px;
   margin: 0 4px;

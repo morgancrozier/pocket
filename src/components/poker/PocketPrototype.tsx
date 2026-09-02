@@ -324,8 +324,6 @@ export function PocketPrototype() {
   const [isPracticeFallback, setIsPracticeFallback] = useState(false);
   const [isRetryingLive, setIsRetryingLive] = useState(false);
   const [suggestion, setSuggestion] = useState<AgentSuggestion | null>(null);
-  const [staleSuggestion, setStaleSuggestion] =
-    useState<AgentSuggestion | null>(null);
   const [recommendationReceipt, setRecommendationReceipt] =
     useState<RecommendationReceipt | null>(null);
   const [suggestionPresentationRevision, setSuggestionPresentationRevision] =
@@ -357,12 +355,7 @@ export function PocketPrototype() {
   suggestionRef.current = suggestion;
   displayedSituationRef.current = situation;
 
-  const clearSuggestion = useCallback((preserveAsStale = false) => {
-    if (preserveAsStale && suggestionRef.current) {
-      setStaleSuggestion(suggestionRef.current);
-    } else if (!preserveAsStale) {
-      setStaleSuggestion(null);
-    }
+  const clearSuggestion = useCallback(() => {
     sessionStorage.removeItem(AGENT_SUGGESTION_STORAGE_KEY);
     setSuggestion(null);
   }, []);
@@ -526,7 +519,6 @@ export function PocketPrototype() {
       if (!situation || playbackActiveRef.current || isSubmitting) return;
       if (!isSuggestionCurrent(situation, next)) return;
       clearRecommendationReceipt();
-      setStaleSuggestion(null);
       setSuggestion(next);
       setSuggestionPresentationRevision((current) => current + 1);
     },
@@ -704,10 +696,6 @@ export function PocketPrototype() {
     if (!situation) return;
 
     const previous = suggestionRef.current;
-    if (previous && !isSuggestionCurrent(situation, previous)) {
-      setStaleSuggestion(previous);
-    }
-
     const restored = restoreStoredSuggestion(
       sessionStorage.getItem(AGENT_SUGGESTION_STORAGE_KEY),
       situation,
@@ -793,6 +781,34 @@ export function PocketPrototype() {
     situation?.stateVersion,
     sizedAction?.type,
     sizedAction?.minTotal,
+  ]);
+
+  useEffect(() => {
+    if (
+      !situation ||
+      !suggestion ||
+      suggestion.handNumber !== situation.handNumber ||
+      suggestion.stateVersion !== situation.stateVersion
+    ) {
+      return;
+    }
+    if (
+      sizedAction &&
+      suggestion.action === sizedAction.type &&
+      typeof suggestion.amount === "number"
+    ) {
+      setBetDraft(String(suggestion.amount));
+      setBetDraftError(null);
+    }
+  }, [
+    situation?.handNumber,
+    situation?.stateVersion,
+    sizedAction?.type,
+    suggestion?.action,
+    suggestion?.amount,
+    suggestion?.handNumber,
+    suggestion?.stateVersion,
+    suggestionPresentationRevision,
   ]);
 
   const commitMockAction = useCallback(
@@ -1188,16 +1204,16 @@ export function PocketPrototype() {
           : "Table paused";
   const railRecommendationLabel = visibleSuggestion
     ? titleCase(describeAction(visibleSuggestion.action, visibleSuggestion.amount))
-    : visibleReceipt
+    : situation.isYourTurn && !situation.handResult && !situation.gameResult
+      ? "Ready for your agent"
+      : visibleReceipt
       ? visibleReceipt.outcome === "followed"
         ? "Recommendation followed"
         : "Recommendation overridden"
       : isPlayingTransition
         ? "Following table action"
-      : staleSuggestion
-        ? "Recommendation expired"
         : supportState === "available"
-          ? "Awaiting a recommendation"
+          ? "Waiting for your turn"
           : supportState === "unavailable"
             ? "Copilot unavailable"
             : supportState === "error"
@@ -1285,12 +1301,9 @@ export function PocketPrototype() {
                 ? `suggestion-${suggestionPresentationRevision}`
                 : visibleReceipt
                   ? `receipt-${visibleReceipt.handNumber}-${visibleReceipt.sourceStateVersion}-${visibleReceipt.outcome}`
-                  : staleSuggestion
-                    ? `stale-${staleSuggestion.handNumber}-${staleSuggestion.stateVersion}`
-                    : `empty-${supportState}`
+                  : `empty-${supportState}`
             }
             suggestion={visibleSuggestion}
-            staleSuggestion={staleSuggestion}
             receipt={visibleReceipt}
             situation={situation}
             supportState={supportState}

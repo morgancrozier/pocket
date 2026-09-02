@@ -61,7 +61,7 @@ test.describe("in-game activity clarity", () => {
 
     await expect(page.getByText("WebMCP unavailable").first()).toBeVisible();
     await expect(page.getByText("tools registered")).toHaveCount(0);
-    await expect(page.locator(".copilot-activity li")).toHaveCount(0);
+    await expect(page.locator(".copilot-activity")).toHaveCount(0);
   });
 
   test("refresh and re-entry leave exactly one live registration per tool", async ({
@@ -105,7 +105,7 @@ test.describe("in-game activity clarity", () => {
     expect(snapshot.names).toEqual([
       "get_current_situation",
       "get_hand_history",
-      "suggest_action",
+      "stage_recommendation",
     ]);
     expect(snapshot.current).toMatchObject({
       contractVersion: 3,
@@ -125,11 +125,11 @@ test.describe("in-game activity clarity", () => {
       .toEqual([
         "get_current_situation",
         "get_hand_history",
-        "suggest_action",
+        "stage_recommendation",
       ]);
     snapshot = await inspect();
     expect(snapshot.audit.overlappingRegistrations).toEqual([]);
-    expect(snapshot.audit.aborts.suggest_action).toBeGreaterThanOrEqual(1);
+    expect(snapshot.audit.aborts.stage_recommendation).toBeGreaterThanOrEqual(1);
 
     await page.getByRole("link", { name: "Pocket home" }).click();
     await expect(
@@ -147,7 +147,7 @@ test.describe("in-game activity clarity", () => {
     expect(snapshot.names).toEqual([
       "get_current_situation",
       "get_hand_history",
-      "suggest_action",
+      "stage_recommendation",
     ]);
     expect(snapshot.audit.overlappingRegistrations).toEqual([]);
 
@@ -157,7 +157,7 @@ test.describe("in-game activity clarity", () => {
     expect(snapshot.names).toEqual([
       "get_current_situation",
       "get_hand_history",
-      "suggest_action",
+      "stage_recommendation",
     ]);
     expect(snapshot.audit.overlappingRegistrations).toEqual([]);
   });
@@ -176,7 +176,7 @@ test.describe("in-game activity clarity", () => {
         (candidate) => candidate.name === "get_current_situation",
       );
       const suggestion = tools.find(
-        (candidate) => candidate.name === "suggest_action",
+        (candidate) => candidate.name === "stage_recommendation",
       );
       if (!current || !suggestion) {
         throw new Error("Expected WebMCP tools are unavailable.");
@@ -194,7 +194,7 @@ test.describe("in-game activity clarity", () => {
     expect(browserContract.names).toEqual([
       "get_current_situation",
       "get_hand_history",
-      "suggest_action",
+      "stage_recommendation",
     ]);
     expect(browserContract.currentDescription).toContain("authoritative");
     expect(browserContract.currentResult).toMatchObject({
@@ -229,7 +229,12 @@ test.describe("in-game activity clarity", () => {
     expect(browserContract.currentResult.context.summary).not.toContain(
       "folded",
     );
-    expect(browserContract.suggestionDescription).toContain("never plays");
+    expect(browserContract.suggestionDescription).toContain(
+      "After deciding what the player should do",
+    );
+    expect(browserContract.suggestionDescription).toContain(
+      "never executes the poker action",
+    );
     expect(browserContract.suggestionInputSchema).toMatchObject({
       required: ["action", "stateVersion"],
       properties: {
@@ -261,15 +266,16 @@ test.describe("in-game activity clarity", () => {
         window.requestAnimationFrame = originalFrame;
       });
     });
-    await expect(page.getByText("Reading the table…").first()).toBeVisible();
+    await expect(page.getByText("Reading the hand…").first()).toBeVisible();
     await page.evaluate(() =>
       (window as typeof window & { __pocketRead: Promise<string> }).__pocketRead,
     );
-    await expect(page.getByText("Read private hand").first()).toBeVisible();
+    await expect(page.getByText("Hand read by your agent").first()).toBeVisible();
+    await expect(page.locator(".copilot-activity")).toHaveCount(1);
 
     const invalid = await page.evaluate(async () => {
       const tools = await document.modelContext.getTools();
-      const tool = tools.find((candidate) => candidate.name === "suggest_action");
+      const tool = tools.find((candidate) => candidate.name === "stage_recommendation");
       if (!tool) throw new Error("Suggestion tool is unavailable.");
       return JSON.parse(
         await document.modelContext.executeTool(tool, {
@@ -283,12 +289,12 @@ test.describe("in-game activity clarity", () => {
       ok: false,
       error: { code: "INVALID_AMOUNT" },
     });
-    await expect(page.getByRole("heading", { name: "Suggestion rejected" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Recommendation rejected" })).toBeVisible();
 
     const versionBeforeAdvice = await page.locator(".header-game-meta").textContent();
     const valid = await page.evaluate(async () => {
       const tools = await document.modelContext.getTools();
-      const tool = tools.find((candidate) => candidate.name === "suggest_action");
+      const tool = tools.find((candidate) => candidate.name === "stage_recommendation");
       if (!tool) throw new Error("Suggestion tool is unavailable.");
       return JSON.parse(
         await document.modelContext.executeTool(tool, {
@@ -296,13 +302,45 @@ test.describe("in-game activity clarity", () => {
           amount: 64,
           stateVersion: 17,
           confidence: 0.72,
+          rationale: "Top pair supports a legal value raise.",
         }),
       ) as { ok: boolean };
     });
     expect(valid.ok).toBe(true);
     await expect(page.locator(".copilot-recommendation.is-current")).toBeVisible();
     await expect(page.locator(".suggestion-action")).toHaveText("Raise to 64");
-    await expect(page.getByText("Recommendation received")).toBeVisible();
+    await expect(page.getByText("Top pair supports a legal value raise.")).toBeVisible();
+    await expect(page.getByText("Suggestion only — no action taken.")).toBeVisible();
+    await expect(page.getByText("Recommendation staged")).toBeVisible();
+    const amount = page.getByRole("spinbutton", { name: "Raise to", exact: true });
+    await expect(amount).toHaveValue("64");
+    const raiseButton = page.getByRole("button", { name: "Raise to 64", exact: true });
+    await expect(raiseButton).toHaveAttribute("data-recommended", "true");
+    await expect(raiseButton.getByText("Agent pick")).toBeVisible();
+    await amount.fill("65");
+    await expect(
+      page.getByRole("button", { name: "Raise to 65", exact: true }),
+    ).not.toHaveAttribute("data-recommended", "true");
+    await expect(page.locator(".copilot-recommendation.is-current")).toBeVisible();
+
+    const passive = await page.evaluate(async () => {
+      const tools = await document.modelContext.getTools();
+      const tool = tools.find(
+        (candidate) => candidate.name === "stage_recommendation",
+      );
+      if (!tool) throw new Error("Suggestion tool is unavailable.");
+      return JSON.parse(
+        await document.modelContext.executeTool(tool, {
+          action: "call",
+          stateVersion: 17,
+        }),
+      ) as { ok: boolean };
+    });
+    expect(passive.ok).toBe(true);
+    await expect(amount).toHaveValue("65");
+    await expect(
+      page.getByRole("button", { name: "Call 32", exact: true }),
+    ).toHaveAttribute("data-recommended", "true");
     await expect(page.locator(".header-game-meta")).toHaveText(versionBeforeAdvice ?? "");
   });
 

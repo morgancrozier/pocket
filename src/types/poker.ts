@@ -133,8 +133,12 @@ export interface AgentSuggestion {
   handNumber: number;
   stateVersion: number;
   action: PokerActionType;
+  /** For bet or raise: final total chips committed on this street. */
   amount?: number;
+  /** Short, display-safe reasoning only; private strategy stays with the agent. */
+  rationale?: string;
   confidence?: number;
+  stagedAt: number;
 }
 
 export interface RawPlayerState extends PublicPlayerView {

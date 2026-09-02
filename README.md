@@ -55,7 +55,7 @@ Poker combines properties that usually appear separately in agentic software:
 ## Humans still play the game
 
 Pocket intentionally separates recommendation from execution. The agent can
-inspect the state its seat is allowed to see and call `suggest_action` to place
+inspect the state its seat is allowed to see and call `stage_recommendation` to place
 one structured recommendation into the interface. It cannot silently take over
 the player's seat.
 
@@ -102,16 +102,20 @@ through the durable demo.
   showdown hands, but never the deck or folded/hidden opponent cards.
 - `get_current_situation` registered through WebMCP.
 - `get_hand_history` registered through WebMCP.
-- `suggest_action` registered only while it is the human's turn.
-- `suggest_action` updates the visible table but never plays the move.
-- `suggest_action` requires the exact `stateVersion` returned by the current
+- `stage_recommendation` registered only while it is the human's turn.
+- `stage_recommendation` updates the visible table but never plays the move.
+- `stage_recommendation` requires the exact `stateVersion` returned by the current
   situation read and rejects stale or no-longer-legal advice.
-- Recommendations show optional agent-provided confidence as context, not as
-  certainty, and a same-state recommendation can visibly replace the previous
-  one after the human supplies new private context.
+- Recommendations may show a bounded, display-safe rationale and optional
+  agent-provided confidence as context, not as certainty. A same-state
+  recommendation can visibly replace the previous one after the human supplies
+  new private context.
 - Hand and state versions expire stale recommendations.
 - A still-current recommendation survives refresh in browser session storage;
   a real table revision removes it.
+- Raise recommendations preview their final street total in the normal raise
+  control. The matching existing action button is labeled **Agent pick** until
+  the player edits that total or chooses another action.
 - After the server accepts the human's action, a client-only receipt records
   whether the recommendation was followed or overridden. It survives later
   revisions of that hand, never enters the poker API or WebMCP output, and is
@@ -283,7 +287,7 @@ of the box. Alternatively, use Google Chrome 149 or later, enable
 Context Tool Inspector. A successful environment shows **WebMCP tools ready**
 in the header. Chrome's WebMCP protocol should enumerate only
 `get_current_situation`, `get_hand_history`, and—while it is the human's
-turn—`suggest_action`.
+turn—`stage_recommendation`.
 
 The quickest judge prompt is:
 
