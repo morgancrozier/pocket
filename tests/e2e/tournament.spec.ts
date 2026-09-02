@@ -271,9 +271,9 @@ const restartedSituation = {
 
 async function installWebMCPStub(
   page: Page,
-  options: { failSuggestionOnce?: boolean } = {},
+  options: { blockSuggestionRegistration?: boolean } = {},
 ) {
-  await page.addInitScript(({ failSuggestionOnce }) => {
+  await page.addInitScript(({ blockSuggestionRegistration }) => {
     const tools = new Map<string, { name: string; execute: (input: object) => unknown }>();
     const audit = {
       registrations: {} as Record<string, number>,
@@ -283,10 +283,16 @@ async function installWebMCPStub(
     };
     const toolIds = new WeakMap<object, number>();
     let nextToolId = 1;
-    let suggestionFailed = false;
+    let suggestionRegistrationBlocked = Boolean(blockSuggestionRegistration);
     Object.defineProperty(window, "__pocketWebMCPAudit", {
       configurable: true,
       value: audit,
+    });
+    Object.defineProperty(window, "__releasePocketSuggestionRegistration", {
+      configurable: true,
+      value: () => {
+        suggestionRegistrationBlocked = false;
+      },
     });
     Object.defineProperty(document, "modelContext", {
       configurable: true,
@@ -296,11 +302,9 @@ async function installWebMCPStub(
           options?: { signal?: AbortSignal },
         ) {
           if (
-            failSuggestionOnce &&
-            tool.name === "stage_recommendation" &&
-            !suggestionFailed
+            suggestionRegistrationBlocked &&
+            tool.name === "stage_recommendation"
           ) {
-            suggestionFailed = true;
             throw new Error("stage_recommendation registration failed for test.");
           }
           const toolId = toolIds.get(tool) ?? nextToolId++;
@@ -387,6 +391,7 @@ test("an invalid sized WebMCP recommendation returns recovery and a valid retry 
   await expect(page.locator("header .status-pill")).toHaveText(
     "WebMCP tools ready",
   );
+  await expect(page.getByRole("heading", { name: "Your turn" })).toBeVisible();
 
   const browserContract = await page.evaluate(async () => {
     const tools = await document.modelContext.getTools();
@@ -517,7 +522,7 @@ test("practice fallback is explicit and can retry the authoritative table", asyn
 test("suggestion registration failure retries only after the table context remounts", async ({
   page,
 }) => {
-  await installWebMCPStub(page, { failSuggestionOnce: true });
+  await installWebMCPStub(page, { blockSuggestionRegistration: true });
   await page.route("**/api/games/demo/state", (route) =>
     route.fulfill({ status: 200, json: initialSituation }),
   );
@@ -532,15 +537,34 @@ test("suggestion registration failure retries only after the table context remou
   await expect(page.locator(".status-pill")).toContainText(
     "WebMCP needs attention",
   );
+  await expect
+    .poll(async () =>
+      page.evaluate(async () =>
+        (await document.modelContext.getTools())
+          .map((tool) => tool.name)
+          .sort(),
+      ),
+    )
+    .toEqual(["get_current_situation", "get_hand_history"]);
+  const auditBeforeGameplay = await webMCPAudit(page);
 
   await page.getByRole("button", { name: "Call 4" }).click();
   await expect(page.locator(".status-pill")).toContainText(
     "WebMCP needs attention",
   );
-  expect((await webMCPAudit(page)).registrations.stage_recommendation).toBeUndefined();
+  expect(await webMCPAudit(page)).toEqual(auditBeforeGameplay);
+  expect(auditBeforeGameplay.registrations.stage_recommendation).toBeUndefined();
+
+  await page.evaluate(() => {
+    (
+      window as typeof window & {
+        __releasePocketSuggestionRegistration: () => void;
+      }
+    ).__releasePocketSuggestionRegistration();
+  });
 
   await page.getByRole("link", { name: "Pocket home" }).click();
-  await page.goBack();
+  await page.getByRole("link", { name: /Play with Bots/ }).click();
   await expect(page.locator(".status-pill")).toContainText(
     "WebMCP tools ready",
   );
@@ -634,12 +658,26 @@ test("authoritative bot actions pace one mutation at a time and skip preserves o
   });
 
   await page.goto("/play");
+  await expect(page.getByRole("heading", { name: "Your turn" })).toBeVisible();
+  await expect(page.locator("header .status-pill")).toHaveText(
+    "WebMCP tools ready",
+  );
+  const lifecycleAudit = await webMCPAudit(page);
+  const staged = await suggest(page, {
+    action: "raise",
+    amount: 12,
+    stateVersion: initialSituation.stateVersion,
+  });
+  expect(staged).toMatchObject({ ok: true });
   await page.getByRole("button", { name: "Call 4" }).click();
 
   await expect(
     page.getByRole("button", { name: "Skip to your turn" }),
   ).toBeVisible();
   await expect(page.getByRole("heading", { name: "Alex is acting" })).toBeVisible();
+  await expect(
+    page.locator(".copilot-recommendation.receipt-overridden"),
+  ).toBeVisible();
   await page.waitForTimeout(300);
   expect(advanceRequests).toBe(0);
   await expect(page.getByRole("button", { name: "Fold" })).toHaveCount(0);
@@ -683,6 +721,17 @@ test("authoritative bot actions pace one mutation at a time and skip preserves o
   await expect(page.getByRole("button", { name: "Call 8" })).toBeVisible();
   expect(actionRequests).toBe(1);
   expect(advanceRequests).toBe(2);
+  await expect(
+    page.locator(".copilot-recommendation.receipt-overridden"),
+  ).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        sessionStorage.getItem("pocket-recommendation-receipt"),
+      ),
+    )
+    .toBeNull();
+  expect(await webMCPAudit(page)).toEqual(lifecycleAudit);
   await expect(
     page.locator(".hand-feed-item").filter({ hasText: /Alex bets\s+8/ }),
   ).toHaveCount(1);
@@ -956,7 +1005,11 @@ test("safe tournament UI replaces and follows advice through restart", async ({
   });
   await expect(page.locator(".suggestion-action")).toHaveText("Call 4");
   await expect(page.getByText("64% confidence")).toBeVisible();
-  await expect(page.getByText("Raise to 12", { exact: true })).toHaveCount(0);
+  await expect(
+    page
+      .locator(".copilot-recommendation.is-current")
+      .getByText("Raise to 12", { exact: true }),
+  ).toHaveCount(0);
   expect(actionBodies).toHaveLength(0);
 
   await page.locator(".companion-rail-mobile-header button").click();
@@ -1057,6 +1110,7 @@ test("rejected actions do not create receipts and accepted overrides do", async 
   await expect(page.locator("header .status-pill")).toHaveText(
     "WebMCP tools ready",
   );
+  await expect(page.getByRole("heading", { name: "Your turn" })).toBeVisible();
   await suggest(page, {
     action: "raise",
     amount: 12,

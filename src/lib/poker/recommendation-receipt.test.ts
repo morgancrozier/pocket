@@ -59,7 +59,7 @@ describe("client-only recommendation receipts", () => {
     expect(overridden.outcome).toBe("overridden");
   });
 
-  it("survives later revisions of the same hand but not a new hand or game", () => {
+  it("survives bot revisions but expires at the next human decision or hand", () => {
     const receipt = createRecommendationReceipt(
       INITIAL_SITUATION,
       {
@@ -76,8 +76,17 @@ describe("client-only recommendation receipts", () => {
       restoreRecommendationReceipt(serialized, {
         ...INITIAL_SITUATION,
         stateVersion: INITIAL_SITUATION.stateVersion + 4,
+        isYourTurn: false,
+        currentActorId: "alex",
+        legalActions: [],
       }),
     ).toEqual(receipt);
+    expect(
+      restoreRecommendationReceipt(serialized, {
+        ...INITIAL_SITUATION,
+        stateVersion: INITIAL_SITUATION.stateVersion + 5,
+      }),
+    ).toBeNull();
     expect(
       restoreRecommendationReceipt(serialized, {
         ...INITIAL_SITUATION,

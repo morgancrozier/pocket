@@ -138,7 +138,10 @@ export function isRecommendationReceiptCurrent(
 ): boolean {
   return (
     receipt.gameId === situation.gameId &&
-    receipt.handNumber === situation.handNumber
+    receipt.handNumber === situation.handNumber &&
+    (!situation.isYourTurn ||
+      Boolean(situation.handResult) ||
+      Boolean(situation.gameResult))
   );
 }
 
