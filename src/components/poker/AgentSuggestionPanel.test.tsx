@@ -65,7 +65,7 @@ describe("AgentSuggestionPanel", () => {
     expect(html).toContain("Agent recommends");
     expect(html).toContain("Raise to 64");
     expect(html).toContain("Top pair can value-raise within the legal range.");
-    expect(html).toContain("Suggestion only — no action taken.");
+    expect(html).toContain("Suggestion only. No action taken.");
     expect(html).not.toContain("74% confidence");
     expect(html).not.toContain("suggestion-confidence");
   });

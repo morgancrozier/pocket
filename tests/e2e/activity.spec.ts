@@ -474,7 +474,7 @@ test.describe("in-game activity clarity", () => {
       page.getByText("Top pair supports a legal value raise."),
     ).toBeVisible();
     await expect(
-      page.getByText("Suggestion only — no action taken."),
+      page.getByText("Suggestion only. No action taken."),
     ).toBeVisible();
     await expect(page.getByText("Recommendation staged")).toHaveCount(0);
     await expect(page.getByText("72% confidence")).toHaveCount(0);

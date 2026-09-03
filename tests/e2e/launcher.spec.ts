@@ -41,7 +41,7 @@ test("the choice-first launcher stays idle and preserves setup drafts", async ({
   ).toBeVisible();
   await expect(
     page.getByText(
-      "Ask your copilot for help during a live hand—without recapping the cards, pot, stacks, or previous action. Through WebMCP, Pocket gives it the exact, current game state your seat is allowed to see and brings its recommendation back to the table.",
+      "Ask your copilot for help during a live hand without recapping the cards, pot, stacks, or previous action. Through WebMCP, Pocket gives it the exact, current game state your seat is allowed to see and brings its recommendation back to the table.",
     ),
   ).toBeVisible();
   await expect(

@@ -15,7 +15,7 @@ const display = Newsreader({
 });
 
 export const metadata: Metadata = {
-  title: "Pocket — Every seat has two minds",
+  title: "Pocket: Every seat has two minds",
   description:
     "A multiplayer poker experiment where every player can bring their own AI agent into the same live game.",
 };

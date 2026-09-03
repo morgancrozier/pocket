@@ -120,7 +120,7 @@ export function HumanActionDock({
   const allInOnly = hasSizingBounds && minTotal === maxTotal;
   const sizedActionLabel = selectedAmount
     ? `${sizingLabel} ${selectedAmount}${allInOnly ? " · All-in" : ""}`
-    : `${sizingLabel} —`;
+    : `${sizingLabel}…`;
   const sizedActionIsRecommended = Boolean(
     recommendation &&
       sizedAction &&

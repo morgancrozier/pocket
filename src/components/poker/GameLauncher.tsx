@@ -134,7 +134,7 @@ export function GameLauncher() {
             <span className="launcher-kicker">Play-money Texas Hold&apos;em</span>
             <h2 id="launcher-title">Bring your own AI to the table.</h2>
             <p className="launcher-body">
-              Ask your copilot for help during a live hand—without recapping the
+              Ask your copilot for help during a live hand without recapping the
               cards, pot, stacks, or previous action. Through WebMCP, Pocket
               gives it the exact, current game state your seat is allowed to see
               and brings its recommendation back to the table.

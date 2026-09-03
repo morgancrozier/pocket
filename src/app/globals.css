@@ -27,6 +27,7 @@
   --success-muted: rgba(143, 214, 172, 0.24);
   --shadow-large: 0 28px 80px rgba(0, 0, 0, 0.42);
   --shadow-small: 0 12px 30px rgba(0, 0, 0, 0.3);
+  font-size: 106.25%;
   font-family:
     var(--font-sans),
     ui-sans-serif,
@@ -967,11 +968,31 @@ button.launcher-choice-trigger[aria-expanded="true"] .launcher-choice-arrow {
 
 .about-multiplayer {
   display: grid;
-  grid-template-columns: minmax(0, 0.85fr) minmax(580px, 1.15fr);
+  grid-template-columns: minmax(0, 1fr) minmax(540px, 1.05fr);
   align-items: center;
-  gap: clamp(54px, 8vw, 112px);
+  gap: clamp(48px, 6vw, 88px);
   padding: 132px 0;
   border-top: 1px solid var(--border);
+}
+
+.about-multiplayer h2 > span {
+  display: block;
+}
+
+.about-heading-nowrap {
+  white-space: nowrap;
+}
+
+.about-multiplayer-copy > .about-multiplayer-principle {
+  margin-top: 18px;
+}
+
+@media (min-width: 901px) and (max-width: 1050px) {
+  .about-multiplayer {
+    grid-template-columns: 1fr;
+    gap: 56px;
+    padding: 104px 0;
+  }
 }
 
 .about-final {
@@ -3145,7 +3166,7 @@ h1 {
 
 .game-layout.game-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(210px, 22vw, 240px);
+  grid-template-columns: minmax(0, 1fr) clamp(250px, 23vw, 280px);
   align-items: stretch;
   gap: 12px;
   overflow: visible;
@@ -4603,6 +4624,12 @@ h1 {
   font-weight: 680;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.companion-rail .hand-feed-action {
+  line-height: 1.35;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .hand-feed-amount {

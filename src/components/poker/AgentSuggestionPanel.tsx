@@ -135,7 +135,7 @@ export function AgentSuggestionPanel({
           </span>
         </div>
         <div className="suggestion-actions">
-          <span>Suggestion only — no action taken.</span>
+          <span>Suggestion only. No action taken.</span>
           <button
             className="copilot-text-button"
             type="button"

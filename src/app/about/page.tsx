@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "About Pocket — Every seat has two minds",
+  title: "About Pocket: Every seat has two minds",
   description:
     "Why Pocket uses poker and WebMCP to explore multiplayer software where every person can bring their own agent.",
 };
@@ -69,7 +69,7 @@ const pokerReasons = [
   {
     label: "Shared",
     title: "One authoritative live game",
-    copy: "The board, pot, stacks, turn order, betting limits, and hand history come from Pocket’s game engine—not from the model’s interpretation of the interface.",
+    copy: "The board, pot, stacks, turn order, betting limits, and hand history come from Pocket’s game engine rather than the model’s interpretation of the interface.",
   },
   {
     label: "Private",
@@ -90,7 +90,7 @@ const multiplayerPrinciples: ReadonlyArray<{
   style?: "emphasized";
 }> = [
   {
-    label: "Seat 0 — Morgan",
+    label: "Seat 0 · Morgan",
     title: "Private cards: A♠ 7♦",
     copy: "Visible only to Morgan’s copilot",
   },
@@ -101,7 +101,7 @@ const multiplayerPrinciples: ReadonlyArray<{
     style: "emphasized",
   },
   {
-    label: "Seat 2 — Riley",
+    label: "Seat 2 · Riley",
     title: "Private cards: 9♣ 9♥",
     copy: "Visible only to Riley’s copilot",
   },
@@ -196,12 +196,12 @@ export default function AboutPage() {
         <div className="about-section-sticky">
           <span className="about-section-number">01 / How it works</span>
           <h2 id="collaboration-title">
-            From live game to useful advice—and back.
+            From live game to useful advice and back.
           </h2>
           <p>
             For someone learning poker or playing an explicitly AI-assisted
             game, asking an external agent for help normally means pausing to
-            relay the cards, pot, stacks, prior actions, and available moves—or
+            relay the cards, pot, stacks, prior actions, and available moves, or
             trusting the agent to reconstruct them from the screen. Pocket uses
             WebMCP to make that handoff direct, exact, and visible.
           </p>
@@ -286,7 +286,9 @@ export default function AboutPage() {
         <div className="about-multiplayer-copy">
           <span className="about-section-number">04 / Every seat</span>
           <h2 id="multiplayer-title">
-            One table. Multiple humans. Multiple agents.
+            <span>One table.</span>
+            <span className="about-heading-nowrap">Multiple humans.</span>
+            <span>Multiple agents.</span>
           </h2>
           <p>
             Pocket explores a multiplayer format where agent assistance is
@@ -295,7 +297,7 @@ export default function AboutPage() {
             Pocket supplies a common interface while enforcing each seat’s
             separate information boundary.
           </p>
-          <p>
+          <p className="about-multiplayer-principle">
             <strong>Same table. Separate permissions.</strong>
           </p>
         </div>
@@ -325,8 +327,8 @@ export default function AboutPage() {
         <p>
           Pocket uses poker to demonstrate a broader model for the web:
           applications can expose authoritative, permissioned, real-time
-          interfaces to the agents their users bring—without surrendering
-          application truth or human control.
+          interfaces to the agents their users bring while keeping application
+          truth and human control intact.
           <br />
           <strong>Pocket supplies truth and permissions.</strong>
           <br />
