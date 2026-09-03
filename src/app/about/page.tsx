@@ -83,7 +83,12 @@ const pokerReasons = [
   },
 ] as const;
 
-const multiplayerPrinciples = [
+const multiplayerPrinciples: ReadonlyArray<{
+  label: string;
+  title: string;
+  copy: string;
+  style?: "emphasized";
+}> = [
   {
     label: "Seat 0 — Morgan",
     title: "Private cards: A♠ 7♦",
@@ -100,7 +105,7 @@ const multiplayerPrinciples = [
     title: "Private cards: 9♣ 9♥",
     copy: "Visible only to Riley’s copilot",
   },
-] as const;
+];
 
 export default function AboutPage() {
   return (
