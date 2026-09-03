@@ -100,10 +100,10 @@ p {
   position: relative;
   display: grid;
   min-height: 100svh;
-  align-items: start;
+  align-items: center;
   overflow: hidden;
   isolation: isolate;
-  padding: clamp(36px, 4vw, 44px) clamp(24px, 4vw, 54px);
+  padding: clamp(20px, 2.5vw, 34px) clamp(24px, 4vw, 54px);
 }
 
 .launcher-page::before {
@@ -141,10 +141,11 @@ p {
 }
 
 .launcher-brand {
-  display: flex;
-  align-items: baseline;
-  gap: 20px;
+  display: grid;
+  justify-items: start;
+  gap: 16px;
   margin-bottom: clamp(54px, 5vw, 76px);
+  transform: translateY(-0.48rem);
 }
 
 .launcher-brand h1 {
@@ -152,11 +153,14 @@ p {
   line-height: 0.78;
 }
 
-.launcher-brand p {
+.launcher-brand .launcher-tagline {
   margin: 0;
   color: var(--muted-strong);
-  font-size: 0.92rem;
-  letter-spacing: -0.015em;
+  font-size: clamp(0.66rem, 0.9vw, 0.88rem);
+  font-weight: 560;
+  letter-spacing: 0.006em;
+  line-height: 1.2;
+  text-wrap: balance;
 }
 
 .launcher-layout {
@@ -175,13 +179,13 @@ p {
 .launcher-kicker {
   margin-bottom: 14px;
   color: var(--accent);
-  font-size: 0.63rem;
+  font-size: 0.74rem;
   font-weight: 820;
   letter-spacing: 0.13em;
   text-transform: uppercase;
 }
 
-.launcher-intro h2 {
+.launcher-intro > h2 {
   max-width: 10ch;
   margin-bottom: 18px;
   font-family: var(--font-display), Georgia, serif;
@@ -2280,22 +2284,21 @@ h1 {
 @media (min-width: 1280px) and (min-height: 800px) {
   .launcher-page {
     align-items: center;
-    padding-top: clamp(64px, 7svh, 78px);
-    padding-bottom: clamp(64px, 7svh, 78px);
+    padding-top: clamp(26px, 3svh, 34px);
+    padding-bottom: clamp(42px, 5svh, 56px);
   }
 }
 
 @media (min-width: 901px) and (max-width: 1279px) {
   .launcher-brand {
-    display: grid;
-    gap: 9px;
+    gap: 12px;
     margin-bottom: 42px;
   }
 }
 
 @media (max-width: 900px) {
   .launcher-page {
-    align-items: start;
+    align-items: center;
     overflow: hidden;
     padding: 28px 22px 48px;
   }
@@ -2309,12 +2312,13 @@ h1 {
     min-height: 0;
   }
 
-  .launcher-intro h2 {
+  .launcher-intro > h2 {
     max-width: 12ch;
   }
 
   .launcher-brand {
     margin-bottom: 48px;
+    transform: translateY(-0.32rem);
   }
 
   .launcher-options {
@@ -2431,8 +2435,7 @@ h1 {
 
   .launcher-brand {
     position: relative;
-    display: grid;
-    gap: 7px;
+    gap: 10px;
     margin-bottom: 40px;
   }
 
@@ -2440,8 +2443,12 @@ h1 {
     font-size: clamp(3.7rem, 19vw, 5rem);
   }
 
-  .launcher-brand p {
-    font-size: 0.84rem;
+  .launcher-brand .launcher-tagline {
+    font-size: 0.76rem;
+  }
+
+  .launcher-kicker {
+    font-size: 0.71rem;
   }
 
   .launcher-layout {
@@ -2452,7 +2459,7 @@ h1 {
     margin-bottom: 11px;
   }
 
-  .launcher-intro h2 {
+  .launcher-intro > h2 {
     margin-bottom: 13px;
     font-size: clamp(2.25rem, 11vw, 3.2rem);
   }

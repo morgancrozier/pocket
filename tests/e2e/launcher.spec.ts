@@ -37,6 +37,12 @@ test("the choice-first launcher stays idle and preserves setup drafts", async ({
 
   await expect(page.getByRole("heading", { name: "Pocket" })).toBeVisible();
   await expect(
+    page.getByRole("heading", {
+      level: 2,
+      name: "Every seat has two minds.",
+    }),
+  ).toBeVisible();
+  await expect(
     page.getByRole("heading", { name: "Bring your own AI to the table." }),
   ).toBeVisible();
   await expect(

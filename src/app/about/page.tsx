@@ -330,6 +330,7 @@ export default function AboutPage() {
           interfaces to the agents their users bring while keeping application
           truth and human control intact.
           <br />
+          <br />
           <strong>Pocket supplies truth and permissions.</strong>
           <br />
           <strong>The agent brings intelligence.</strong>

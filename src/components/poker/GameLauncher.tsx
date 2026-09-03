@@ -129,7 +129,7 @@ export function GameLauncher() {
           <section className="launcher-intro" aria-labelledby="launcher-title">
             <header className="launcher-brand">
               <h1>Pocket</h1>
-              <p>Every seat has two minds.</p>
+              <h2 className="launcher-tagline">Every seat has two minds.</h2>
             </header>
             <span className="launcher-kicker">Play-money Texas Hold&apos;em</span>
             <h2 id="launcher-title">Bring your own AI to the table.</h2>
