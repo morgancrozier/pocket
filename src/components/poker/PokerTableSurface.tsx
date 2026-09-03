@@ -16,6 +16,35 @@ export function PokerTableSurface({
 }: PokerTableSurfaceProps) {
   const streetLabel =
     situation.street.charAt(0).toUpperCase() + situation.street.slice(1);
+  const localPlayer = situation.players.find(
+    (player) => player.id === situation.yourPlayerId,
+  );
+  const seatSpan = Math.max(
+    1,
+    ...situation.players.map((player) => player.seat + 1),
+  );
+  const opponents = situation.players
+    .filter((player) => player.id !== situation.yourPlayerId)
+    .sort((left, right) => {
+      const leftDistance =
+        (left.seat - situation.yourSeat + seatSpan) % seatSpan;
+      const rightDistance =
+        (right.seat - situation.yourSeat + seatSpan) % seatSpan;
+      return leftDistance - rightDistance;
+    });
+  const renderSeat = (player: (typeof situation.players)[number]) => (
+    <PlayerSeat
+      key={player.id}
+      player={player}
+      isCurrent={player.id === situation.currentActorId}
+      isDealer={player.seat === situation.dealerSeat}
+      isYou={player.id === situation.yourPlayerId}
+      actionCue={presentation.seatCues[player.id]}
+      localCards={
+        player.id === situation.yourPlayerId ? situation.yourCards : undefined
+      }
+    />
+  );
 
   return (
     <div className="table-stage">
@@ -56,21 +85,8 @@ export function PokerTableSurface({
           </span>
         </div>
 
-        {situation.players.map((player) => (
-          <PlayerSeat
-            key={player.id}
-            player={player}
-            isCurrent={player.id === situation.currentActorId}
-            isDealer={player.seat === situation.dealerSeat}
-            isYou={player.id === situation.yourPlayerId}
-            actionCue={presentation.seatCues[player.id]}
-            localCards={
-              player.id === situation.yourPlayerId
-                ? situation.yourCards
-                : undefined
-            }
-          />
-        ))}
+        <div className="opponent-roster">{opponents.map(renderSeat)}</div>
+        {localPlayer ? renderSeat(localPlayer) : null}
       </div>
     </div>
   );

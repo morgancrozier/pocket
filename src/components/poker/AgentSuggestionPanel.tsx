@@ -42,9 +42,9 @@ function supportCopy(
 ): { label: string; detail: string } {
   if (supportState === "available") {
     return {
-      label: "WebMCP ready",
+      label: "Ready",
       detail: isDecisionOpen
-        ? "Your browser agent can read this seat-safe table now."
+        ? "Ask your browser agent for advice. It will appear here."
         : "Your browser agent can read this seat-safe table.",
     };
   }

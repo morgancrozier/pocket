@@ -88,6 +88,11 @@ export function HandActionFeed({
   const historyTriggerRef = useRef<HTMLButtonElement>(null);
   const historyDialogRef = useRef<HTMLElement>(null);
 
+  const openFullHistory = (trigger: HTMLButtonElement) => {
+    historyTriggerRef.current = trigger;
+    setShowFullHistory(true);
+  };
+
   useEffect(() => {
     if (!showFullHistory) return;
     const dialog = historyDialogRef.current;
@@ -229,16 +234,33 @@ export function HandActionFeed({
 
   return (
     <section className="hand-feed" aria-labelledby="hand-feed-title">
+      <button
+        className="companion-rail-toggle"
+        type="button"
+        aria-label="Open current hand history"
+        aria-controls="full-history-dialog"
+        aria-expanded={showFullHistory}
+        aria-haspopup="dialog"
+        onClick={(event) => openFullHistory(event.currentTarget)}
+      >
+        <span>This hand</span>
+        <svg aria-hidden="true" focusable="false" viewBox="0 0 20 20">
+          <path d="M5 5h10M5 10h10M5 15h7" />
+        </svg>
+      </button>
+
       <div className="rail-section-heading">
         <div>
           <h2 id="hand-feed-title">This hand</h2>
           <span>{privacyLabel}</span>
         </div>
         <button
-          ref={historyTriggerRef}
           className="full-history-button is-inline"
           type="button"
-          onClick={() => setShowFullHistory(true)}
+          aria-controls="full-history-dialog"
+          aria-expanded={showFullHistory}
+          aria-haspopup="dialog"
+          onClick={(event) => openFullHistory(event.currentTarget)}
         >
           Full history
           <svg aria-hidden="true" focusable="false" viewBox="0 0 20 20">
@@ -311,6 +333,7 @@ export function HandActionFeed({
           }}
         >
           <section
+            id="full-history-dialog"
             ref={historyDialogRef}
             className="history-dialog"
             role="dialog"

@@ -73,16 +73,6 @@ export function PlayerSeat({
       ) : null}
 
       <div className={`seat-panel ${isCurrent ? "is-current" : ""}`}>
-        {isDealer ? (
-          <span
-            className="dealer-chip"
-            role="img"
-            aria-label="Dealer button"
-            title="Dealer button"
-          >
-            D
-          </span>
-        ) : null}
         <div className="seat-name">
           <span dir="auto" title={isYou ? player.displayName : undefined}>
             {isYou ? "You" : player.displayName}
@@ -90,6 +80,16 @@ export function PlayerSeat({
           {player.hasAgent ? (
             <span className="agent-badge" title="Personal agent can use this seat">
               Copilot
+            </span>
+          ) : null}
+          {isDealer ? (
+            <span
+              className="dealer-chip"
+              role="img"
+              aria-label="Dealer button"
+              title="Dealer button"
+            >
+              D
             </span>
           ) : null}
         </div>
