@@ -8,6 +8,7 @@ import { DebugPanel } from "@/components/poker/DebugPanel";
 import { HandActionFeed } from "@/components/poker/HandActionFeed";
 import { HumanActionDock } from "@/components/poker/HumanActionDock";
 import { PokerTableSurface } from "@/components/poker/PokerTableSurface";
+import { WebMCPActivity } from "@/components/poker/WebMCPActivity";
 import {
   advanceMockStreet,
   appendEvent,
@@ -17,10 +18,7 @@ import {
   nextMockBoard,
   nextMockLegalActions,
 } from "@/lib/poker/mock-state";
-import {
-  createDecisionPresentation,
-  describeAction,
-} from "@/lib/poker/decision-presentation";
+import { createDecisionPresentation } from "@/lib/poker/decision-presentation";
 import {
   describeTransitionFrame,
 } from "@/lib/poker/transition-playback";
@@ -56,10 +54,6 @@ import type {
 } from "@/types/poker";
 
 type DemoMode = "engine" | "loading" | "mock";
-
-function titleCase(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
 
 function supportLabel(
   supportState: WebMCPSupportState,
@@ -1002,24 +996,6 @@ export function PocketPrototype() {
         : currentPlayer
           ? `${currentPlayer.displayName} is acting`
           : "Table paused";
-  const railRecommendationLabel = visibleSuggestion
-    ? titleCase(describeAction(visibleSuggestion.action, visibleSuggestion.amount))
-    : situation.isYourTurn && !situation.handResult && !situation.gameResult
-      ? "Ready for your agent"
-      : visibleReceipt
-      ? visibleReceipt.outcome === "followed"
-        ? "Recommendation followed"
-        : "Recommendation overridden"
-      : isBotTurn
-        ? "Following table action"
-        : supportState === "available"
-          ? "Waiting for your turn"
-          : supportState === "unavailable"
-            ? "Copilot unavailable"
-            : supportState === "error"
-              ? "Copilot needs attention"
-              : "Preparing copilot";
-
   return (
     <div className="prototype">
       <PocketHeader
@@ -1038,88 +1014,99 @@ export function PocketPrototype() {
             />
           ) : null}
 
-          <HumanActionDock
-            situation={situation}
-            turnTitle={turnTitle}
-            isSubmitting={isSubmitting}
-            notice={tableMessage}
-            betDraft={betDraft}
-            betDraftError={betDraftError}
-            betInputId="bet-amount"
-            recommendation={visibleSuggestion}
-            practiceFallback={
-              isPracticeFallback
-                ? {
-                    isRetrying: isRetryingLive,
-                    onRetry: () => void retryLiveTable(),
-                  }
-                : null
-            }
-            terminalAction={
-              situation.gameResult
-                ? {
-                    label: "Play again",
-                    onClick: () => {
-                      if (mode === "mock") void resetMockDemo();
-                      else void restartEngineGame();
-                    },
-                  }
-                : situation.handResult
+          <div
+            className="decision-dock"
+            role="group"
+            aria-label="Current decision"
+          >
+            <HumanActionDock
+              situation={situation}
+              turnTitle={turnTitle}
+              isSubmitting={isSubmitting}
+              notice={tableMessage}
+              betDraft={betDraft}
+              betDraftError={betDraftError}
+              betInputId="bet-amount"
+              recommendation={visibleSuggestion}
+              practiceFallback={
+                isPracticeFallback
                   ? {
-                      label: mode === "engine" ? "Next hand" : "Reset hand",
-                      onClick: () => {
-                        if (mode === "mock") void resetMockDemo();
-                        else void startNextEngineHand();
-                      },
+                      isRetrying: isRetryingLive,
+                      onRetry: () => void retryLiveTable(),
                     }
                   : null
-            }
-            playback={
-              isBotTurn
-                ? {
-                    status:
-                      tableMessage ??
-                      (currentBot
-                        ? `${currentBot.displayName} is considering the next action…`
-                        : "Following the table action…"),
-                    onSkip: skipToHuman,
-                  }
-                : null
-            }
-            onBetDraftChange={(value) => {
-              setBetDraft(value);
-              setBetDraftError(null);
-            }}
-            onCommit={commitHumanAction}
-            onSubmitSizedAction={submitSizedAction}
-          />
+              }
+              terminalAction={
+                situation.gameResult
+                  ? {
+                      label: "Play again",
+                      onClick: () => {
+                        if (mode === "mock") void resetMockDemo();
+                        else void restartEngineGame();
+                      },
+                    }
+                  : situation.handResult
+                    ? {
+                        label: mode === "engine" ? "Next hand" : "Reset hand",
+                        onClick: () => {
+                          if (mode === "mock") void resetMockDemo();
+                          else void startNextEngineHand();
+                        },
+                      }
+                    : null
+              }
+              playback={
+                isBotTurn
+                  ? {
+                      status:
+                        tableMessage ??
+                        (currentBot
+                          ? `${currentBot.displayName} is considering the next action…`
+                          : "Following the table action…"),
+                      onSkip: skipToHuman,
+                    }
+                  : null
+              }
+              onBetDraftChange={(value) => {
+                setBetDraft(value);
+                setBetDraftError(null);
+              }}
+              onCommit={commitHumanAction}
+              onSubmitSizedAction={submitSizedAction}
+            />
+          </div>
+
+          <div className="support-panels">
+            <AgentSuggestionPanel
+              key={
+                visibleSuggestion
+                  ? `suggestion-${suggestionPresentationRevision}`
+                  : visibleReceipt
+                    ? `receipt-${visibleReceipt.handNumber}-${visibleReceipt.sourceStateVersion}-${visibleReceipt.outcome}`
+                    : `empty-${supportState}`
+              }
+              suggestion={visibleSuggestion}
+              receipt={visibleReceipt}
+              situation={situation}
+              supportState={supportState}
+              activity={activity}
+              registrationError={registrationError}
+              isSubmitting={isSubmitting || isBotTurn}
+              isPlayingTransition={isBotTurn}
+              onDismiss={() => {
+                clearSuggestion();
+                setTableMessage("Suggestion dismissed. Choose any legal action.");
+              }}
+            />
+            <WebMCPActivity
+              activity={activity}
+              situation={situation}
+              receipt={visibleReceipt}
+            />
+          </div>
         </div>
 
-        <CompanionRail
-          statusLabel={supportLabel(supportState, isPracticeFallback)}
-          recommendationLabel={railRecommendationLabel}
-        >
-          <AgentSuggestionPanel
-            key={
-              visibleSuggestion
-                ? `suggestion-${suggestionPresentationRevision}`
-                : visibleReceipt
-                  ? `receipt-${visibleReceipt.handNumber}-${visibleReceipt.sourceStateVersion}-${visibleReceipt.outcome}`
-                  : `empty-${supportState}`
-            }
-            suggestion={visibleSuggestion}
-            receipt={visibleReceipt}
-            situation={situation}
-            supportState={supportState}
-            activity={activity}
-            registrationError={registrationError}
-            isSubmitting={isSubmitting || isBotTurn}
-            isPlayingTransition={isBotTurn}
-            onDismiss={() => {
-              clearSuggestion();
-              setTableMessage("Suggestion dismissed. Choose any legal action.");
-            }}
-          />
+        <CompanionRail>
           <HandActionFeed situation={situation} receipt={visibleReceipt} />
         </CompanionRail>
       </section>

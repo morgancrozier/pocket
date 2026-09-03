@@ -1,7 +1,6 @@
 import { describeAction } from "@/lib/poker/decision-presentation";
 import type { RecommendationReceipt } from "@/lib/poker/recommendation-receipt";
 import type {
-  PokerToolActivityReceipt,
   PokerToolActivityState,
   WebMCPSupportState,
 } from "@/lib/webmcp/usePokerTools";
@@ -36,16 +35,6 @@ function suggestionActionLabel(
   return titleCase(describeAction(suggestion.action, amount));
 }
 
-function toolReceiptLabel(receipt: PokerToolActivityReceipt): string {
-  if (receipt.tool === "get_current_situation") {
-    return "Hand read by your agent";
-  }
-  if (receipt.tool === "get_hand_history") return "Public history read";
-  return receipt.status === "completed"
-    ? "Recommendation staged"
-    : "Recommendation rejected";
-}
-
 function supportCopy(
   supportState: WebMCPSupportState,
   registrationError: string | null | undefined,
@@ -55,24 +44,24 @@ function supportCopy(
     return {
       label: "WebMCP ready",
       detail: isDecisionOpen
-        ? "Ask your browser agent to read this hand and recommend one legal action."
-        : "Your browser agent can read this seat-safe table now.",
+        ? "Your browser agent can read this seat-safe table now."
+        : "Your browser agent can read this seat-safe table.",
     };
   }
   if (supportState === "unavailable") {
     return {
-      label: "WebMCP unavailable",
+      label: "Unavailable",
       detail: "This browser or context cannot expose Pocket’s tools.",
     };
   }
   if (supportState === "error") {
     return {
-      label: "WebMCP needs attention",
+      label: "Needs attention",
       detail: registrationError ?? "Reload the table to register the tools again.",
     };
   }
   return {
-    label: "Preparing WebMCP",
+    label: "Preparing",
     detail: "Pocket is preparing the seat-safe tool surface.",
   };
 }
@@ -127,10 +116,6 @@ export function AgentSuggestionPanel({
 
   if (suggestion) {
     const action = suggestionActionLabel(suggestion, situation);
-    const confidence =
-      typeof suggestion.confidence === "number"
-        ? `${Math.round(suggestion.confidence * 100)}% confidence`
-        : null;
 
     recommendationContent = (
       <div className="copilot-recommendation is-current">
@@ -148,9 +133,6 @@ export function AgentSuggestionPanel({
           <span className="suggestion-freshness">
             Hand {situation.handNumber} · {titleCase(situation.street)}
           </span>
-          {confidence ? (
-            <span className="suggestion-confidence">{confidence}</span>
-          ) : null}
         </div>
         <div className="suggestion-actions">
           <span>Suggestion only — no action taken.</span>
@@ -178,26 +160,6 @@ export function AgentSuggestionPanel({
         <span className="suggestion-freshness">
           Ask your agent to read the current situation and try again.
         </span>
-      </div>
-    );
-  } else if (isDecisionOpen) {
-    recommendationContent = (
-      <div className="copilot-recommendation is-awaiting">
-        <span className="copilot-awaiting-mark" aria-hidden="true" />
-        <div>
-          <h3>
-            {supportState === "available"
-              ? "Ready for your agent"
-              : supportState === "unavailable"
-                ? "Agent connection unavailable"
-                : "Preparing your agent"}
-          </h3>
-          <p>
-            {supportState === "available"
-              ? "Ask your agent: What should I do?"
-              : copy.detail}
-          </p>
-        </div>
       </div>
     );
   } else if (receipt) {
@@ -229,30 +191,8 @@ export function AgentSuggestionPanel({
         <span className="suggestion-freshness">Hand {receipt.handNumber}</span>
       </div>
     );
-  } else if (isPlayingTransition) {
-    recommendationContent = (
-      <div className="copilot-recommendation is-awaiting">
-        <span className="copilot-awaiting-mark" aria-hidden="true" />
-        <div>
-          <h3>Watching the table action</h3>
-          <p>Advice opens when the action reaches you.</p>
-        </div>
-      </div>
-    );
   } else {
-    recommendationContent = (
-      <div className="copilot-recommendation is-awaiting">
-        <span className="copilot-awaiting-mark" aria-hidden="true" />
-        <div>
-          <h3>{isSpectating ? "Advice paused" : "Waiting for your turn"}</h3>
-          <p>
-            {isSpectating
-              ? "Your agent can still read the spectator-safe public table."
-              : "Pocket will clear advice whenever the table changes."}
-          </p>
-        </div>
-      </div>
-    );
+    recommendationContent = null;
   }
 
   return (
@@ -267,7 +207,17 @@ export function AgentSuggestionPanel({
           <span className="status-dot" />
           {activeLabel ?? copy.label}
         </span>
-        <p>{activeLabel ? "Your browser agent is using Pocket now." : copy.detail}</p>
+        {!suggestion && !receipt && !latestStageFailure ? (
+          <p>
+            {activeLabel
+              ? "Your browser agent is using Pocket now."
+              : isPlayingTransition
+                ? "Watching table action. Advice opens on your turn."
+                : isSpectating
+                  ? "Your browser agent can read this spectator-safe table."
+                  : copy.detail}
+          </p>
+        ) : null}
       </div>
 
       <div aria-live="polite" aria-atomic="true">
@@ -280,27 +230,6 @@ export function AgentSuggestionPanel({
           </div>
         ) : null}
       </div>
-
-      {activeLabel || latestActivity ? (
-        <p
-          className="copilot-activity"
-          data-status={activeLabel ? "active" : latestActivity?.status}
-          aria-live="polite"
-        >
-          <span
-            className={activeLabel ? "copilot-activity-active" : undefined}
-            aria-hidden="true"
-          >
-            {activeLabel
-              ? null
-              : latestActivity?.status === "completed"
-                ? "✓"
-                : "!"}
-          </span>
-          {activeLabel ??
-            (latestActivity ? toolReceiptLabel(latestActivity) : null)}
-        </p>
-      ) : null}
 
       <AdviceBoundary isSpectating={isSpectating} />
     </section>

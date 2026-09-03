@@ -7,6 +7,7 @@ export function CommittedChips({ amount, playerName }: CommittedChipsProps) {
   return (
     <span
       className="committed-chips"
+      role="img"
       aria-label={`${playerName} has ${amount} chip${amount === 1 ? "" : "s"} committed this street`}
     >
       <span className="committed-chips-disc" aria-hidden="true">

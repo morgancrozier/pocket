@@ -16,12 +16,14 @@ function renderDock(
   betDraft: string,
   recommendation: AgentSuggestion | null,
   situation: PokerSituation = INITIAL_SITUATION,
+  notice?: string,
 ) {
   return renderToStaticMarkup(
     <HumanActionDock
       situation={situation}
       turnTitle="Your turn"
       isSubmitting={false}
+      notice={notice}
       betDraft={betDraft}
       betInputId="test-bet-amount"
       recommendation={recommendation}
@@ -33,19 +35,43 @@ function renderDock(
 }
 
 describe("HumanActionDock recommendation integration", () => {
-  it("marks the matching raise total as the agent pick", () => {
+  it("keeps the decision heading focused on live betting totals", () => {
+    const html = renderDock("64", null);
+
+    expect(html).toContain("Pot");
+    expect(html).toContain("To call");
+    expect(html).not.toContain("decision-latest");
+  });
+
+  it("hides the sizing editor until the player chooses raise", () => {
+    const html = renderDock("64", null);
+
+    expect(html).toContain("Raise to…");
+    expect(html).not.toContain('type="number"');
+    expect(html).not.toContain('type="range"');
+    expect(html).not.toContain("Min 64 · Max 184");
+  });
+
+  it("does not repeat a notice that describes the latest public action", () => {
+    const html = renderDock("64", null, INITIAL_SITUATION, "Alex raises to · 44.");
+
+    expect(html).toContain(
+      'class="decision-notice" aria-live="polite" aria-atomic="true"></p>',
+    );
+  });
+
+  it("marks the matching raise choice as the agent pick", () => {
     const html = renderDock("80", raiseRecommendation);
 
-    expect(html).toContain('value="80"');
     expect(html).toContain('data-recommended="true"');
     expect(html).toContain("Agent pick");
-    expect(html).toContain("Raise to 80");
+    expect(html).toContain("Raise to…");
   });
 
   it("removes the agent-pick marker when the human changes the raise total", () => {
     const html = renderDock("81", raiseRecommendation);
 
-    expect(html).toContain("Raise to 81");
+    expect(html).toContain("Raise to…");
     expect(html).not.toContain('data-recommended="true"');
     expect(html).not.toContain("Agent pick");
   });

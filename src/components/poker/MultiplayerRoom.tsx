@@ -13,6 +13,7 @@ import { CompanionRail } from "@/components/poker/CompanionRail";
 import { HandActionFeed } from "@/components/poker/HandActionFeed";
 import { HumanActionDock } from "@/components/poker/HumanActionDock";
 import { PokerTableSurface } from "@/components/poker/PokerTableSurface";
+import { WebMCPActivity } from "@/components/poker/WebMCPActivity";
 import {
   createDecisionPresentation,
   describeAction,
@@ -121,10 +122,6 @@ async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
   const payload = response.status === 204 ? null : ((await response.json()) as unknown);
   if (!response.ok) await responseError(response, payload);
   return payload;
-}
-
-function titleCase(value: string) {
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function webMCPLabel(value: string) {
@@ -874,27 +871,6 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
       isComplete: playing.phase === "complete",
     },
   );
-  const railRecommendationLabel = visibleSuggestion
-    ? titleCase(describeAction(visibleSuggestion.action, visibleSuggestion.amount))
-    : !isSpectating &&
-        playing.situation.isYourTurn &&
-        !playing.situation.handResult &&
-        !playing.situation.gameResult
-      ? "Ready for your agent"
-      : visibleReceipt
-      ? visibleReceipt.outcome === "followed"
-        ? "Recommendation followed"
-        : "Recommendation overridden"
-      : isBotTurn
-        ? "Following table action"
-        : supportState === "available"
-          ? "Waiting for your turn"
-          : supportState === "unavailable"
-            ? "Copilot unavailable"
-            : supportState === "error"
-              ? "Copilot needs attention"
-              : "Preparing copilot";
-
   return (
     <div className="prototype room-prototype">
       <RoomHeader
@@ -910,68 +886,80 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
             presentation={decisionPresentation}
             turnTitle={turnTitle}
           />
-          <HumanActionDock
-            situation={playing.situation}
-            turnTitle={turnTitle}
-            isSubmitting={submitting}
-            notice={error ?? (submitting ? message : null)}
-            betDraft={betDraft}
-            betDraftError={betError}
-            betInputId="room-bet-amount"
-            isSpectating={isSpectating}
-            recommendation={visibleSuggestion}
-            terminalAction={
-              playing.phase === "complete" && playing.viewer.isOwner
-                ? { label: "Play again", onClick: () => void restartRoom() }
-                : null
-            }
-            playback={
-              isBotTurn && !isSpectating
-                ? {
-                    status:
-                      message ||
-                      (currentBot
-                        ? `${currentBot.displayName} is considering the next action…`
-                        : "Following the table action…"),
-                    onSkip: skipToHuman,
-                  }
-                : null
-            }
-            onBetDraftChange={(value) => {
-              setBetDraft(value);
-              setBetError(null);
-            }}
-            onCommit={(action, amount) => void commitAction(action, amount)}
-            onSubmitSizedAction={submitSizedAction}
-          />
+          <div
+            className="decision-dock"
+            role="group"
+            aria-label="Current decision"
+          >
+            <HumanActionDock
+              situation={playing.situation}
+              turnTitle={turnTitle}
+              isSubmitting={submitting}
+              notice={error ?? (submitting ? message : null)}
+              betDraft={betDraft}
+              betDraftError={betError}
+              betInputId="room-bet-amount"
+              isSpectating={isSpectating}
+              recommendation={visibleSuggestion}
+              terminalAction={
+                playing.phase === "complete" && playing.viewer.isOwner
+                  ? { label: "Play again", onClick: () => void restartRoom() }
+                  : null
+              }
+              playback={
+                isBotTurn && !isSpectating
+                  ? {
+                      status:
+                        message ||
+                        (currentBot
+                          ? `${currentBot.displayName} is considering the next action…`
+                          : "Following the table action…"),
+                      onSkip: skipToHuman,
+                    }
+                  : null
+              }
+              onBetDraftChange={(value) => {
+                setBetDraft(value);
+                setBetError(null);
+              }}
+              onCommit={(action, amount) => void commitAction(action, amount)}
+              onSubmitSizedAction={submitSizedAction}
+            />
+          </div>
+
+          <div className="support-panels">
+            <AgentSuggestionPanel
+              key={
+                visibleSuggestion
+                  ? `suggestion-${suggestionRevision}`
+                  : visibleReceipt
+                    ? `receipt-${visibleReceipt.sourceStateVersion}`
+                    : `empty-${supportState}-${playing.viewer.status}`
+              }
+              suggestion={visibleSuggestion}
+              receipt={visibleReceipt}
+              situation={playing.situation}
+              supportState={supportState}
+              activity={activity}
+              registrationError={registrationError}
+              isSubmitting={submitting || isBotTurn}
+              isSpectating={isSpectating}
+              isPlayingTransition={isBotTurn}
+              onDismiss={() => {
+                clearSuggestion();
+                setMessage("Suggestion dismissed. Choose any legal action.");
+              }}
+            />
+            <WebMCPActivity
+              activity={activity}
+              situation={playing.situation}
+              receipt={visibleReceipt}
+              isSpectating={isSpectating}
+            />
+          </div>
         </div>
 
-        <CompanionRail
-          statusLabel={webMCPLabel(supportState)}
-          recommendationLabel={railRecommendationLabel}
-        >
-          <AgentSuggestionPanel
-            key={
-              visibleSuggestion
-                ? `suggestion-${suggestionRevision}`
-                : visibleReceipt
-                  ? `receipt-${visibleReceipt.sourceStateVersion}`
-                  : `empty-${supportState}-${playing.viewer.status}`
-            }
-            suggestion={visibleSuggestion}
-            receipt={visibleReceipt}
-            situation={playing.situation}
-            supportState={supportState}
-            activity={activity}
-            registrationError={registrationError}
-            isSubmitting={submitting || isBotTurn}
-            isSpectating={isSpectating}
-            isPlayingTransition={isBotTurn}
-            onDismiss={() => {
-              clearSuggestion();
-              setMessage("Suggestion dismissed. Choose any legal action.");
-            }}
-          />
+        <CompanionRail>
           <HandActionFeed
             situation={playing.situation}
             receipt={visibleReceipt}

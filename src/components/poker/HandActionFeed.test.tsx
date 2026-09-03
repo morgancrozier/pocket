@@ -35,16 +35,16 @@ describe("HandActionFeed", () => {
     },
   };
 
-  it("keeps previous streets compact and records awards", () => {
+  it("keeps every street chronological and records awards", () => {
     const html = renderToStaticMarkup(
       <HandActionFeed situation={completedSituation} />,
     );
 
     expect(html).toContain("hand-feed-amount\"> 1");
     expect(html).toContain("River");
-    expect(html).toContain("1 action");
     expect(html).toContain("Preflop");
-    expect(html).toContain("3 actions");
+    expect(html).toContain("Alex raises to");
+    expect(html).toContain("You call");
     expect(html).toContain("Showdown");
     expect(html).toContain("You win");
   });

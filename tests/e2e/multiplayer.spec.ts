@@ -371,6 +371,12 @@ test("real two-browser room remains seat-safe through spectating and restart", a
       (action) => action.type === "bet" || action.type === "raise",
     );
     if (maximum) {
+      await actingPage
+        .getByRole("button", {
+          name: maximum.type === "raise" ? "Raise to…" : "Bet…",
+          exact: true,
+        })
+        .click();
       await actingPage.getByRole("button", { name: /^All-in:/ }).click();
       await actingPage
         .getByRole("button", {
@@ -497,8 +503,8 @@ test("real two-browser room remains seat-safe through spectating and restart", a
           ]);
         await expect(
           spectator.page
-            .getByLabel("Private copilot and current hand")
-            .getByText("WebMCP ready", { exact: true }),
+            .getByLabel("Copilot and current hand")
+            .getByText("Active", { exact: true }),
         ).toBeVisible({ timeout: 15_000 });
         await expect
           .poll(async () => {

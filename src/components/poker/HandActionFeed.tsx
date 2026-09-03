@@ -85,7 +85,6 @@ export function HandActionFeed({
   privacyLabel = "Seat-safe history",
 }: HandActionFeedProps) {
   const [showFullHistory, setShowFullHistory] = useState(false);
-  const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
   const historyTriggerRef = useRef<HTMLButtonElement>(null);
   const historyDialogRef = useRef<HTMLElement>(null);
 
@@ -143,13 +142,14 @@ export function HandActionFeed({
     [situation.recentActions],
   );
   const publicActions = actions.filter((event) => event.action !== "deal");
-  const currentActions = publicActions.filter(
-    (event) => event.street === situation.street,
-  );
-  const previousGroups = groupActions(
-    publicActions.filter((event) => event.street !== situation.street),
-  ).toReversed();
+  const publicGroups = groupActions(publicActions);
   const fullGroups = groupActions(actions);
+  const currentPublicGroup = situation.handResult
+    ? null
+    : (publicGroups.find((group) => group.street === situation.street) ?? null);
+  const previousPublicGroups = publicGroups.filter(
+    (group) => group !== currentPublicGroup,
+  );
   const latestSequence = situation.handResult
     ? null
     : (publicActions.at(-1)?.sequence ?? null);
@@ -167,6 +167,7 @@ export function HandActionFeed({
         {boardCards.length ? (
           <span
             className="hand-feed-board"
+            role="img"
             aria-label={`${STREET_LABELS[street]} cards`}
           >
             {boardCards.map(compactCard).join(" ")}
@@ -248,14 +249,37 @@ export function HandActionFeed({
 
       {publicActions.length || situation.handResult ? (
         <div className="hand-feed-groups">
-          {currentActions.length ? (
-            <section className="hand-feed-group is-current" key={situation.street}>
-              {renderStreetHeading(situation.street)}
+          {previousPublicGroups.length ? (
+            <div className="hand-feed-previous">
+              {previousPublicGroups.map((group) => (
+                <details className="hand-feed-previous-group" key={group.street}>
+                  <summary>
+                    <span>{STREET_LABELS[group.street]}</span>
+                    <span>
+                      {group.actions.length}{" "}
+                      {group.actions.length === 1 ? "action" : "actions"}
+                    </span>
+                    <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16">
+                      <path d="m6 4 4 4-4 4" />
+                    </svg>
+                  </summary>
+                  <ol className="hand-feed-previous-actions hand-feed-list history-list">
+                    {group.actions.map(renderAction)}
+                  </ol>
+                </details>
+              ))}
+            </div>
+          ) : null}
+          {currentPublicGroup ? (
+            <section className="hand-feed-group is-current">
+              {renderStreetHeading(currentPublicGroup.street)}
               <ol className="hand-feed-list history-list">
-                {currentActions.map(renderAction)}
+                {currentPublicGroup.actions.map(renderAction)}
               </ol>
             </section>
-          ) : !situation.handResult ? (
+          ) : null}
+          {!situation.handResult &&
+          !currentPublicGroup ? (
             <section className="hand-feed-group is-current is-empty">
               {renderStreetHeading(situation.street)}
               <p>No public action on this street yet.</p>
@@ -272,56 +296,6 @@ export function HandActionFeed({
               </div>
               <ol className="hand-feed-list history-list">{renderResult()}</ol>
             </section>
-          ) : null}
-          {previousGroups.length ? (
-            <div className="hand-feed-previous" aria-label="Previous streets">
-              {previousGroups.map((group) => {
-                const groupKey =
-                  `${situation.gameId}:${situation.handNumber}:${group.street}`;
-                const isExpanded = expandedGroupKey === groupKey;
-                const disclosureId = `hand-feed-${group.street}-actions`;
-
-                return (
-                  <div
-                    className="hand-feed-previous-group"
-                    data-expanded={isExpanded}
-                    key={group.street}
-                  >
-                    <button
-                      type="button"
-                      aria-expanded={isExpanded}
-                      aria-controls={disclosureId}
-                      onClick={() =>
-                        setExpandedGroupKey(isExpanded ? null : groupKey)
-                      }
-                    >
-                      <span>{STREET_LABELS[group.street]}</span>
-                      <span>
-                        {group.actions.length} action
-                        {group.actions.length === 1 ? "" : "s"}
-                      </span>
-                      <svg
-                        aria-hidden="true"
-                        focusable="false"
-                        viewBox="0 0 20 20"
-                      >
-                        <path d="m7.5 5 5 5-5 5" />
-                      </svg>
-                    </button>
-                    {isExpanded ? (
-                      <div
-                        className="hand-feed-previous-actions"
-                        id={disclosureId}
-                      >
-                        <ol className="hand-feed-list history-list">
-                          {group.actions.map(renderAction)}
-                        </ol>
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
           ) : null}
         </div>
       ) : (

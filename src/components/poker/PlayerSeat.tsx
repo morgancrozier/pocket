@@ -74,7 +74,12 @@ export function PlayerSeat({
 
       <div className={`seat-panel ${isCurrent ? "is-current" : ""}`}>
         {isDealer ? (
-          <span className="dealer-chip" aria-label="Dealer button" title="Dealer button">
+          <span
+            className="dealer-chip"
+            role="img"
+            aria-label="Dealer button"
+            title="Dealer button"
+          >
             D
           </span>
         ) : null}

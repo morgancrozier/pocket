@@ -9,7 +9,9 @@ import {
 import type {
   AgentSuggestion,
   HandActionEvent,
+  PokerActionIntent,
   PokerSituation,
+  PokerStreet,
   RoomPhase,
   RoomViewerStatus,
 } from "@/types/poker";
@@ -20,11 +22,16 @@ export interface PokerToolActivityReceipt {
   tool: PokerToolActivityEvent["tool"];
   status: "completed" | "rejected";
   message?: string;
+  handNumber?: number;
+  stateVersion?: number;
+  street?: PokerStreet;
+  recommendation?: PokerActionIntent;
 }
 
 export interface PokerToolActivityState {
   activeTool: PokerToolActivityEvent["tool"] | null;
   latest: PokerToolActivityReceipt | null;
+  recent: PokerToolActivityReceipt[];
 }
 
 interface UsePokerToolsInput {
@@ -71,9 +78,11 @@ export function usePokerTools({
   const interactionLockedRef = useRef(interactionLocked);
   const roomPhaseRef = useRef(roomPhase);
   const viewerStatusRef = useRef(viewerStatus);
+  const latestSuggestionRef = useRef<AgentSuggestion | null>(null);
   const [activity, setActivity] = useState<PokerToolActivityState>({
     activeTool: null,
     latest: null,
+    recent: [],
   });
 
   situationRef.current = situation;
@@ -86,18 +95,51 @@ export function usePokerTools({
 
   const recordActivity = useCallback((event: PokerToolActivityEvent) => {
     if (event.phase === "started") {
+      if (event.tool === "stage_recommendation") {
+        latestSuggestionRef.current = null;
+      }
       setActivity((current) => ({ ...current, activeTool: event.tool }));
       return;
     }
 
+    const currentSituation = situationRef.current;
+    const latestSuggestion =
+      event.tool === "stage_recommendation"
+        ? latestSuggestionRef.current
+        : null;
+    const recommendationAmount = latestSuggestion
+      ? latestSuggestion.action === "call"
+        ? (currentSituation?.legalActions.find(
+            (action) => action.type === "call",
+          )?.amount ?? currentSituation?.toCall)
+        : latestSuggestion.amount
+      : undefined;
     const receipt: PokerToolActivityReceipt = {
       tool: event.tool,
       status: event.phase,
       message: event.message,
+      ...(currentSituation
+        ? {
+            handNumber: currentSituation.handNumber,
+            stateVersion: currentSituation.stateVersion,
+            street: currentSituation.street,
+          }
+        : {}),
+      ...(latestSuggestion
+        ? {
+            recommendation: {
+              action: latestSuggestion.action,
+              ...(recommendationAmount === undefined
+                ? {}
+                : { amount: recommendationAmount }),
+            },
+          }
+        : {}),
     };
     setActivity((current) => ({
       activeTool: current.activeTool === event.tool ? null : current.activeTool,
       latest: receipt,
+      recent: [...current.recent, receipt].slice(-6),
     }));
   }, []);
 
@@ -105,8 +147,16 @@ export function usePokerTools({
   const stateVersion = situation?.stateVersion;
 
   useEffect(() => {
-    setActivity({ activeTool: null, latest: null });
-  }, [situation?.gameId, handNumber, stateVersion]);
+    setActivity({ activeTool: null, latest: null, recent: [] });
+  }, [situation?.gameId, handNumber]);
+
+  useEffect(() => {
+    setActivity((current) => ({
+      ...current,
+      activeTool: null,
+      latest: null,
+    }));
+  }, [stateVersion]);
 
   useEffect(() => {
     if (!registrationEnabled) {
@@ -187,8 +237,10 @@ export function usePokerTools({
       try {
         const tool = createStageRecommendationTool({
           getSituation: () => situationRef.current,
-          onSuggestion: (suggestion) =>
-            suggestionHandlerRef.current(suggestion),
+          onSuggestion: (suggestion) => {
+            latestSuggestionRef.current = suggestion;
+            suggestionHandlerRef.current(suggestion);
+          },
           onActivity: recordActivity,
           isRevisionCurrent: () => revisionCurrentRef.current?.() ?? true,
           isInteractionLocked: () => interactionLockedRef.current,

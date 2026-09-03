@@ -7,6 +7,7 @@ import type { PokerToolActivityState } from "@/lib/webmcp/usePokerTools";
 const idleActivity: PokerToolActivityState = {
   activeTool: null,
   latest: null,
+  recent: [],
 };
 
 function renderPanel(
@@ -30,18 +31,20 @@ describe("AgentSuggestionPanel", () => {
   it("keeps the ready state compact and preserves the human-action boundary", () => {
     const html = renderPanel();
 
-    expect(html).toContain("Ready for your agent");
-    expect(html).toContain("Ask your agent: What should I do?");
+    expect(html).toContain("Private copilot");
+    expect(html).toContain("WebMCP ready");
+    expect(html).toContain("Your browser agent can read this seat-safe table now.");
     expect(html).toContain("Recommendations never execute a poker action");
+    expect(html).not.toContain("copilot-recommendation is-awaiting");
     expect(html).not.toContain("copilot-onboarding-steps");
   });
 
   it("does not claim readiness when WebMCP is unavailable", () => {
     const html = renderPanel({ supportState: "unavailable" });
 
-    expect(html).toContain("WebMCP unavailable");
+    expect(html).toContain("Unavailable");
     expect(html).not.toContain("tools registered");
-    expect(html).toContain("Agent connection unavailable");
+    expect(html).toContain("cannot expose Pocket’s tools");
   });
 
   it("prominently presents a staged recommendation and its concise rationale", () => {
@@ -52,6 +55,7 @@ describe("AgentSuggestionPanel", () => {
         action: "raise",
         amount: 64,
         rationale: "Top pair can value-raise within the legal range.",
+        confidence: 0.74,
         stagedAt: 1_777_777_777_777,
       },
     });
@@ -60,6 +64,8 @@ describe("AgentSuggestionPanel", () => {
     expect(html).toContain("Raise to 64");
     expect(html).toContain("Top pair can value-raise within the legal range.");
     expect(html).toContain("Suggestion only — no action taken.");
+    expect(html).not.toContain("74% confidence");
+    expect(html).not.toContain("suggestion-confidence");
   });
 
   it("shows a structured rejection without replacing current advice", () => {
@@ -78,6 +84,7 @@ describe("AgentSuggestionPanel", () => {
           status: "rejected",
           message: "Minimum total for raise is 64.",
         },
+        recent: [],
       },
     });
 
@@ -87,7 +94,7 @@ describe("AgentSuggestionPanel", () => {
     expect(html).toContain("Minimum total for raise is 64.");
   });
 
-  it("shows one read status instead of accumulating a checklist", () => {
+  it("leaves completed read activity to the dedicated WebMCP surface", () => {
     const html = renderPanel({
       activity: {
         activeTool: null,
@@ -95,12 +102,35 @@ describe("AgentSuggestionPanel", () => {
           tool: "get_current_situation",
           status: "completed",
         },
+        recent: [],
       },
     });
 
-    expect(html).toContain("Hand read by your agent");
-    expect(html).not.toContain("Recent WebMCP activity");
-    expect(html.match(/copilot-activity/g)).toHaveLength(1);
+    expect(html).not.toContain("Hand read by your agent");
+    expect(html).not.toContain("copilot-activity");
+  });
+
+  it("does not repeat a completed recommendation activity below current advice", () => {
+    const html = renderPanel({
+      suggestion: {
+        handNumber: INITIAL_SITUATION.handNumber,
+        stateVersion: INITIAL_SITUATION.stateVersion,
+        action: "call",
+        stagedAt: 1_777_777_777_777,
+      },
+      activity: {
+        activeTool: null,
+        latest: {
+          tool: "stage_recommendation",
+          status: "completed",
+        },
+        recent: [],
+      },
+    });
+
+    expect(html).toContain("Agent recommends");
+    expect(html).not.toContain("Recommendation staged");
+    expect(html).not.toContain("copilot-activity");
   });
 });
 
@@ -108,7 +138,7 @@ describe("AgentSuggestionPanel registration truthfulness", () => {
   it("states WebMCP readiness without claiming an agent connection", () => {
     const openHtml = renderPanel();
     expect(openHtml).toContain("WebMCP ready");
-    expect(openHtml).toContain("Ask your browser agent to read this hand");
+    expect(openHtml).toContain("can read this seat-safe table now");
     expect(openHtml).not.toContain("Seat-safe connection");
     expect(openHtml).not.toContain("tools registered");
 
@@ -121,7 +151,7 @@ describe("AgentSuggestionPanel registration truthfulness", () => {
       },
     });
     expect(waitingHtml).toContain("WebMCP ready");
-    expect(waitingHtml).toContain("can read this seat-safe table now");
+    expect(waitingHtml).toContain("can read this seat-safe table");
     expect(waitingHtml).not.toContain("tools registered");
   });
 });

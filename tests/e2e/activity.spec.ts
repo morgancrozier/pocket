@@ -396,8 +396,13 @@ test.describe("in-game activity clarity", () => {
     await page.evaluate(() =>
       (window as typeof window & { __pocketRead: Promise<string> }).__pocketRead,
     );
-    await expect(page.getByText("Hand read by your agent").first()).toBeVisible();
-    await expect(page.locator(".copilot-activity")).toHaveCount(1);
+    const readActivity = page
+      .locator(".webmcp-activity-list li")
+      .filter({ hasText: "get_current_situation" })
+      .last();
+    await expect(readActivity).toBeVisible();
+    await expect(readActivity).toContainText("Hand 8 · Flop · state v17 · seat-safe");
+    await expect(page.locator(".copilot-activity")).toHaveCount(0);
 
     const invalid = await page.evaluate(async () => {
       const tools = await document.modelContext.getTools();
@@ -434,11 +439,24 @@ test.describe("in-game activity clarity", () => {
     });
     expect(valid.ok).toBe(true);
     await expect(page.locator(".copilot-recommendation.is-current")).toBeVisible();
+    await expect(
+      page
+        .locator(".webmcp-activity-list li")
+        .filter({ hasText: "stage_recommendation" })
+        .last(),
+    ).toContainText("state v17 → Raise to 64");
     await expect(page.locator(".suggestion-action")).toHaveText("Raise to 64");
     await expect(page.getByText("Top pair supports a legal value raise.")).toBeVisible();
     await expect(page.getByText("Suggestion only — no action taken.")).toBeVisible();
-    await expect(page.getByText("Recommendation staged")).toBeVisible();
+    await expect(page.getByText("Recommendation staged")).toHaveCount(0);
+    await expect(page.getByText("72% confidence")).toHaveCount(0);
+    const sizingTrigger = page.getByRole("button", {
+      name: "Raise to…",
+      exact: true,
+    });
+    await sizingTrigger.click();
     const amount = page.getByRole("spinbutton", { name: "Raise to", exact: true });
+    await expect(amount).toBeFocused();
     await expect(amount).toHaveValue("64");
     const raiseButton = page.getByRole("button", { name: "Raise to 64", exact: true });
     await expect(raiseButton).toHaveAttribute("data-recommended", "true");
@@ -448,6 +466,8 @@ test.describe("in-game activity clarity", () => {
       page.getByRole("button", { name: "Raise to 65", exact: true }),
     ).not.toHaveAttribute("data-recommended", "true");
     await expect(page.locator(".copilot-recommendation.is-current")).toBeVisible();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(sizingTrigger).toBeFocused();
 
     const passive = await page.evaluate(async () => {
       const tools = await document.modelContext.getTools();
@@ -463,10 +483,11 @@ test.describe("in-game activity clarity", () => {
       ) as { ok: boolean };
     });
     expect(passive.ok).toBe(true);
-    await expect(amount).toHaveValue("65");
     await expect(
       page.getByRole("button", { name: "Call 32", exact: true }),
     ).toHaveAttribute("data-recommended", "true");
+    await page.getByRole("button", { name: "Raise to…", exact: true }).click();
+    await expect(amount).toHaveValue("65");
     await expect(page.locator(".header-game-meta")).toHaveText(versionBeforeAdvice ?? "");
   });
 
@@ -477,22 +498,21 @@ test.describe("in-game activity clarity", () => {
     await page.goto("/play?mode=mock");
 
     const trail = page.locator(".hand-feed > .hand-feed-groups .hand-feed-item");
-    await expect(trail).toHaveCount(2);
-    await expect(trail.nth(0)).toContainText("You bet 12");
-    await expect(trail.nth(1)).toContainText("Alex raises to 44");
-    await expect(trail.nth(1)).toContainText("Latest");
-    await expect(trail.nth(1)).toHaveAttribute("aria-current", "true");
-    await expect(page.locator(".hand-feed-previous")).toContainText(
-      "Preflop3 actions",
-    );
-    const preflopDisclosure = page.getByRole("button", {
-      name: "Preflop 3 actions",
-    });
-    await preflopDisclosure.click();
-    await expect(preflopDisclosure).toHaveAttribute("aria-expanded", "true");
+    await expect(trail).toHaveCount(5);
+    await expect(trail.nth(0)).toContainText("You call 2");
+    await expect(trail.nth(3)).toContainText("You bet 12");
+    await expect(trail.nth(4)).toContainText("Alex raises to 44");
+    await expect(trail.nth(4)).toContainText("Latest");
+    await expect(trail.nth(4)).toHaveAttribute("aria-current", "true");
     await expect(
-      page.locator(".hand-feed-previous-actions .hand-feed-item"),
-    ).toHaveCount(3);
+      page.locator(".hand-feed-previous-group").first().locator("summary"),
+    ).toContainText("Preflop");
+    await expect(
+      page.locator(".hand-feed-previous-group").first().locator("summary"),
+    ).toContainText("3 actions");
+    await expect(
+      page.locator(".hand-feed-group.is-current").getByRole("heading"),
+    ).toHaveText("Flop");
     await expect(
       page.getByRole("dialog", { name: "Full hand history" }),
     ).toHaveCount(0);
@@ -596,6 +616,10 @@ test.describe("in-game activity clarity", () => {
     const action = (value: number) =>
       page.getByRole("button", { name: `Raise to ${value}`, exact: true });
 
+    await expect(amount).toHaveCount(0);
+    await expect(page.getByRole("slider")).toHaveCount(0);
+    await page.getByRole("button", { name: "Raise to…", exact: true }).click();
+    await expect(page.getByRole("slider")).toHaveCount(0);
     await expect(amount).toHaveValue("64");
     await expect(action(64)).toBeVisible();
     await expect(
@@ -625,15 +649,19 @@ test.describe("in-game activity clarity", () => {
     await expect(amount).toHaveValue("64");
     await page.getByRole("button", { name: "Min: 64", exact: true }).click();
 
-    const slider = page.getByRole("slider", { name: "Raise to slider" });
-    await slider.evaluate((element: HTMLInputElement) => {
-      const setValue = Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        "value",
-      )?.set;
-      setValue?.call(element, "120");
-      element.dispatchEvent(new Event("input", { bubbles: true }));
+    const decrement = page.getByRole("button", {
+      name: "Decrease raise to amount",
     });
+    const increment = page.getByRole("button", {
+      name: "Increase raise to amount",
+    });
+    await expect(decrement).toBeDisabled();
+    await increment.click();
+    await expect(amount).toHaveValue("65");
+    await decrement.click();
+    await expect(amount).toHaveValue("64");
+
+    await amount.fill("120");
     await expect(amount).toHaveValue("120");
     await expect(action(120)).toBeVisible();
 
@@ -644,7 +672,7 @@ test.describe("in-game activity clarity", () => {
   });
 
   for (const viewport of [
-    { label: "split screen", width: 880, height: 900 },
+    { label: "split screen", width: 900, height: 900 },
     { label: "mobile", width: 390, height: 844 },
   ]) {
     test(`${viewport.label} keeps activity and actions inside the viewport`, async ({
@@ -660,8 +688,11 @@ test.describe("in-game activity clarity", () => {
           .locator("dd"),
       ).toHaveText("32");
       await expect(page.getByRole("button", { name: "Call 32" })).toBeVisible();
-      await expect(page.locator(".companion-rail-toggle")).toBeVisible();
-      await page.locator(".companion-rail-toggle").click();
+      await expect(page.locator(".private-copilot")).toBeVisible();
+      await expect(page.locator(".hand-feed")).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Open current hand history" }),
+      ).toHaveCount(0);
       await expect(page.locator(".hand-feed-item.is-latest")).toContainText(
         "Alex raises to 44",
       );

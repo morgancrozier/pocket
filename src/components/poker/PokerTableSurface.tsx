@@ -44,7 +44,11 @@ export function PokerTableSurface({
               />
             ))}
           </div>
-          <span className="pot-label" aria-label={`Pot ${situation.pot} chips`}>
+          <span
+            className="pot-label"
+            role="img"
+            aria-label={`Pot ${situation.pot} chips`}
+          >
             <span aria-hidden="true">Pot</span>
             <strong key={situation.pot} className="pot-amount" aria-hidden="true">
               {situation.pot}

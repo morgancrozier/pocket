@@ -923,7 +923,7 @@ test("safe tournament UI replaces and follows advice through restart", async ({
     });
   });
 
-  await page.setViewportSize({ width: 880, height: 900 });
+  await page.setViewportSize({ width: 820, height: 900 });
   await page.goto("/play");
   await expect(page.locator("header .status-pill")).toHaveText(
     "WebMCP tools ready",
@@ -940,12 +940,9 @@ test("safe tournament UI replaces and follows advice through restart", async ({
   ]) {
     expect(initialWebMCPAudit.registrations[name]).toBeGreaterThanOrEqual(1);
   }
-  await page
-    .getByRole("button", { name: /Ready for your agent.*WebMCP tools ready/ })
-    .click();
-  await expect(page.getByRole("heading", { name: "Ready for your agent" })).toBeVisible();
-  await page.locator(".companion-rail-mobile-header button").click();
+  await expect(page.getByText("Ready for your browser agent.")).toBeVisible();
 
+  await page.getByRole("button", { name: "Raise to…", exact: true }).click();
   const amount = page.getByRole("spinbutton", { name: "Raise to", exact: true });
   await expect(amount).toHaveValue("8");
   await expect(
@@ -961,8 +958,8 @@ test("safe tournament UI replaces and follows advice through restart", async ({
   await page.getByRole("button", { name: "Pot: 20", exact: true }).click();
   await expect(amount).toHaveValue("20");
 
-  const slider = page.getByRole("slider", { name: "Raise to slider" });
-  await slider.fill("16");
+  await expect(page.getByRole("slider")).toHaveCount(0);
+  await amount.fill("16");
   await expect(amount).toHaveValue("16");
   await expect(
     page.getByRole("button", { name: "Raise to 16", exact: true }),
@@ -990,12 +987,9 @@ test("safe tournament UI replaces and follows advice through restart", async ({
     stateVersion: initialSituation.stateVersion,
     confidence: 0.8,
   });
-  await page
-    .getByRole("button", { name: /Raise to 12.*WebMCP tools ready/ })
-    .click();
   await expect(page.locator(".copilot-recommendation.is-current")).toBeVisible();
   await expect(page.locator(".suggestion-action")).toHaveText("Raise to 12");
-  await expect(page.getByText("80% confidence")).toBeVisible();
+  await expect(page.getByText("80% confidence")).toHaveCount(0);
   expect(actionBodies).toHaveLength(0);
 
   await suggest(page, {
@@ -1004,7 +998,7 @@ test("safe tournament UI replaces and follows advice through restart", async ({
     confidence: 0.64,
   });
   await expect(page.locator(".suggestion-action")).toHaveText("Call 4");
-  await expect(page.getByText("64% confidence")).toBeVisible();
+  await expect(page.getByText("64% confidence")).toHaveCount(0);
   await expect(
     page
       .locator(".copilot-recommendation.is-current")
@@ -1012,14 +1006,8 @@ test("safe tournament UI replaces and follows advice through restart", async ({
   ).toHaveCount(0);
   expect(actionBodies).toHaveLength(0);
 
-  await page.locator(".companion-rail-mobile-header button").click();
   await page.getByRole("button", { name: "Call 4", exact: true }).click();
   await expect(page.getByRole("heading", { name: "You’re out" })).toBeVisible();
-  await page
-    .getByRole("button", {
-      name: /Recommendation followed.*WebMCP tools ready/,
-    })
-    .click();
   await expect(
     page.getByRole("heading", { name: "Recommendation followed" }),
   ).toBeVisible();
@@ -1043,18 +1031,13 @@ test("safe tournament UI replaces and follows advice through restart", async ({
     )
     .toContain("stage_recommendation");
 
-  await page.locator(".companion-rail-mobile-header button").click();
   await page.getByRole("button", { name: "Play again" }).click();
   await expect(page.getByText("Hand 1", { exact: true }).first()).toBeVisible();
   await expect(
     page.getByText("Blinds 1 / 2", { exact: false }).first(),
   ).toBeVisible();
   await expect(page.getByText("Recommendation followed")).toHaveCount(0);
-  await expect(
-    page.getByRole("button", {
-      name: /Ready for your agent.*WebMCP tools ready/,
-    }),
-  ).toBeVisible();
+  await expect(page.getByText("Ready for your browser agent.")).toBeVisible();
   expect(restartBodies).toEqual([{ expectedStateVersion: 24 }]);
   const restartedWebMCPAudit = await webMCPAudit(page);
   expect(restartedWebMCPAudit).toEqual(initialWebMCPAudit);
@@ -1105,7 +1088,7 @@ test("rejected actions do not create receipts and accepted overrides do", async 
     });
   });
 
-  await page.setViewportSize({ width: 880, height: 900 });
+  await page.setViewportSize({ width: 820, height: 900 });
   await page.goto("/play");
   await expect(page.locator("header .status-pill")).toHaveText(
     "WebMCP tools ready",
@@ -1117,12 +1100,9 @@ test("rejected actions do not create receipts and accepted overrides do", async 
     stateVersion: initialSituation.stateVersion,
     confidence: 0.8,
   });
-  await page
-    .getByRole("button", { name: /Raise to 12.*WebMCP tools ready/ })
-    .click();
   await expect(page.locator(".copilot-recommendation.is-current")).toBeVisible();
-  await page.locator(".companion-rail-mobile-header button").click();
 
+  await page.getByRole("button", { name: "Raise to…", exact: true }).click();
   const amount = page.getByRole("spinbutton", { name: "Raise to", exact: true });
   await amount.fill("16");
   await page
@@ -1130,7 +1110,7 @@ test("rejected actions do not create receipts and accepted overrides do", async 
     .click();
 
   await expect(
-    page.getByRole("button", { name: /Raise to 12.*WebMCP tools ready/ }),
+    page.locator(".suggestion-action"),
   ).toBeVisible();
   await expect(page.getByText("Recommendation followed")).toHaveCount(0);
   await expect(page.getByText("You overrode your copilot")).toHaveCount(0);
@@ -1138,9 +1118,6 @@ test("rejected actions do not create receipts and accepted overrides do", async 
 
   await page
     .getByRole("button", { name: "Raise to 16", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: /Recommendation overridden.*WebMCP tools ready/ })
     .click();
   await expect(
     page.getByRole("heading", { name: "You overrode your copilot" }),
