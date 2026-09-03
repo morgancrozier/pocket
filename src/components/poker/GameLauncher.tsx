@@ -134,16 +134,17 @@ export function GameLauncher() {
             <span className="launcher-kicker">Play-money Texas Hold&apos;em</span>
             <h2 id="launcher-title">Bring your own AI to the table.</h2>
             <p className="launcher-body">
-              Pocket uses WebMCP to give your browser agent a seat-safe view of
-              the live hand. It can reason and send advice back to the table,
-              but you still make every move.
+              Ask your copilot for help during a live hand—without recapping the
+              cards, pot, stacks, or previous action. Through WebMCP, Pocket
+              gives it the exact, current game state your seat is allowed to see
+              and brings its recommendation back to the table.
             </p>
             <p className="launcher-principle">
-              Your agent recommends. You decide.
+              Pocket provides the facts. Your agent recommends. You decide.
             </p>
             <p className="launcher-trust">
               Play money <span aria-hidden="true">·</span> No account needed
-              <span aria-hidden="true">·</span> No built-in AI
+              <span aria-hidden="true">·</span> Every move stays yours
             </p>
           </section>
 
@@ -158,8 +159,8 @@ export function GameLauncher() {
                 <span className="launcher-choice-copy">
                   <strong>Play with Bots</strong>
                   <small>
-                    The fastest way to try Pocket: sit down, ask your agent, and
-                    make the first decision yourself. Bots fill the other seats.
+                    Start instantly against bot opponents. Ask your agent for
+                    help during a live hand, then choose the action yourself.
                   </small>
                 </span>
                 <span className="launcher-choice-arrow" aria-hidden="true">
@@ -181,8 +182,8 @@ export function GameLauncher() {
                 <span className="launcher-choice-copy">
                   <strong>Play with Friends</strong>
                   <small>
-                    Host or join a private table. Each player can bring their
-                    own agent.
+                    Host or join a private table where every player can bring
+                    their own compatible agent.
                   </small>
                 </span>
                 <span className="launcher-choice-arrow" aria-hidden="true">
@@ -206,7 +207,7 @@ export function GameLauncher() {
                     >
                       <span>
                         <strong>Host a game</strong>
-                        <small>Open a private table</small>
+                        <small>Create a private table</small>
                       </span>
                       <i aria-hidden="true">
                         {activeSetup === "host" ? "−" : "+"}
@@ -222,7 +223,7 @@ export function GameLauncher() {
                     >
                       <span>
                         <strong>Join with a code</strong>
-                        <small>Take the second seat</small>
+                        <small>Enter a friend&apos;s table</small>
                       </span>
                       <i aria-hidden="true">
                         {activeSetup === "join" ? "−" : "+"}
@@ -336,8 +337,8 @@ export function GameLauncher() {
                 <span className="launcher-choice-copy">
                   <strong>See how Pocket works</strong>
                   <small>
-                    See how WebMCP gives an external agent a seat-safe view of
-                    the hand while you keep control of every move.
+                    See how WebMCP gives an agent exact live context, protects
+                    each player&apos;s private cards, and returns advice to the game.
                   </small>
                 </span>
                 <span className="launcher-choice-arrow" aria-hidden="true">

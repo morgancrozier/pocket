@@ -41,14 +41,16 @@ test("the choice-first launcher stays idle and preserves setup drafts", async ({
   ).toBeVisible();
   await expect(
     page.getByText(
-      "Pocket uses WebMCP to give your browser agent a seat-safe view of the live hand. It can reason and send advice back to the table, but you still make every move.",
+      "Ask your copilot for help during a live hand—without recapping the cards, pot, stacks, or previous action. Through WebMCP, Pocket gives it the exact, current game state your seat is allowed to see and brings its recommendation back to the table.",
     ),
   ).toBeVisible();
   await expect(
     page.locator(".launcher-trust"),
-  ).toContainText(/Play money.*No account needed.*No built-in AI/);
+  ).toContainText(/Play money.*No account needed.*Every move stays yours/);
   await expect(
-    page.getByText("Your agent recommends. You decide."),
+    page.getByText(
+      "Pocket provides the facts. Your agent recommends. You decide.",
+    ),
   ).toBeVisible();
   await expect(page.locator(".launcher-collaboration-mark")).toHaveCount(0);
   await expect(page.getByRole("link", { name: /Play with Bots/ })).toBeVisible();
@@ -82,7 +84,7 @@ test("the choice-first launcher stays idle and preserves setup drafts", async ({
   await expect(friendsTrigger).toHaveAttribute("aria-expanded", "true");
   await expect(
     page.getByText(
-      "Host or join a private table. Each player can bring their own agent.",
+      "Host or join a private table where every player can bring their own compatible agent.",
     ),
   ).toBeVisible();
   const hostTrigger = page.getByRole("button", { name: /Host a game/ });
