@@ -131,6 +131,90 @@ describe("HiveTech authoritative adapter", () => {
     expect(getAuthoritativeVersion(state)).toBe(1);
   });
 
+  it("returns unopened preflop action to the human big blind after every caller", () => {
+    const state = createAuthoritativeGame({
+      gameId: "big-blind-option-test",
+      deterministicSeed: 42,
+      players: [
+        {
+          id: "button",
+          displayName: "June",
+          seat: 0,
+          stack: 200,
+          isBot: true,
+          hasAgent: false,
+        },
+        {
+          id: "small-blind",
+          displayName: "Alex",
+          seat: 1,
+          stack: 200,
+          isBot: true,
+          hasAgent: false,
+        },
+        {
+          id: "hero",
+          displayName: "Morgan",
+          seat: 2,
+          stack: 200,
+          isBot: false,
+          hasAgent: true,
+        },
+        {
+          id: "under-the-gun",
+          displayName: "Theo",
+          seat: 3,
+          stack: 200,
+          isBot: true,
+          hasAgent: false,
+        },
+      ],
+    });
+
+    const afterUnderTheGun = applyAuthoritativeAction(state, "under-the-gun", {
+      action: "call",
+    });
+    const afterButton = applyAuthoritativeAction(afterUnderTheGun, "button", {
+      action: "call",
+    });
+    const afterSmallBlind = applyAuthoritativeAction(
+      afterButton,
+      "small-blind",
+      { action: "call" },
+    );
+    const decision = getCurrentDecision(afterSmallBlind);
+    const hero = projectAuthoritativeGame(afterSmallBlind, "hero");
+
+    expect(decision).toMatchObject({
+      actorId: "hero",
+      street: "preflop",
+    });
+    expect(decision.legalActions).toEqual([
+      { type: "fold" },
+      { type: "check" },
+      { type: "raise", minTotal: 4, maxTotal: 200 },
+    ]);
+    expect(hero.isYourTurn).toBe(true);
+    expect(hero.smallBlindSeat).toBe(1);
+    expect(hero.bigBlindSeat).toBe(2);
+    expect(hero.toCall).toBe(0);
+    expect(
+      hero.players.find((player) => player.id === "hero")?.committedThisStreet,
+    ).toBe(2);
+    expect(hero.board).toEqual([]);
+    expect(hero.street).toBe("preflop");
+
+    const afterBigBlindChecks = applyAuthoritativeAction(
+      afterSmallBlind,
+      "hero",
+      { action: "check" },
+    );
+    const flop = projectAuthoritativeGame(afterBigBlindChecks, "hero");
+
+    expect(flop.street).toBe("flop");
+    expect(flop.board).toHaveLength(3);
+  });
+
   it("settles a passive showdown and conserves every chip", () => {
     const initial = createGame(7);
     const initialTotal = getAuthoritativeChipTotal(initial);

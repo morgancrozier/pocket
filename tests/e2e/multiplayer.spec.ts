@@ -220,7 +220,8 @@ test("real two-browser room remains seat-safe through spectating and restart", a
 
   try {
     await pageA.goto("/");
-    await pageA.getByRole("button", { name: /Host a Game/ }).click();
+    await pageA.getByRole("button", { name: /Play with Friends/ }).click();
+    await pageA.getByRole("button", { name: /Host a game/ }).click();
     await expect(pageA.locator("#host-display-name")).toBeFocused();
     await pageA.locator("#host-display-name").fill("Morgan");
     await pageA.getByRole("button", { name: "Create table" }).click();
@@ -245,7 +246,8 @@ test("real two-browser room remains seat-safe through spectating and restart", a
     await pageB.goto(`/table/${roomCode}`);
     await expect(pageB.getByText("Take the second seat")).toBeVisible();
     await pageB.goto("/");
-    await pageB.getByRole("button", { name: /Join with a Code/ }).click();
+    await pageB.getByRole("button", { name: /Play with Friends/ }).click();
+    await pageB.getByRole("button", { name: /Join with a code/ }).click();
     await expect(pageB.locator("#join-room-code")).toBeFocused();
     await pageB.locator("#join-room-code").fill("ZZZZZZZZ");
     await pageB.locator("#join-display-name-home").fill("Morgan");

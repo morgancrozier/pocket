@@ -39,12 +39,31 @@ test("the choice-first launcher stays idle and preserves setup drafts", async ({
   await expect(
     page.getByRole("heading", { name: "Bring your own AI to the table." }),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: /Play with Bots/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Host a Game/ })).toBeVisible();
   await expect(
-    page.getByRole("button", { name: /Join with a Code/ }),
+    page.getByText(
+      "Pocket uses WebMCP to give your browser agent a seat-safe view of the live hand. It can reason and send advice back to the table, but you still make every move.",
+    ),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: "About Pocket" })).toBeVisible();
+  await expect(
+    page.locator(".launcher-trust"),
+  ).toContainText(/Play money.*No account needed.*No built-in AI/);
+  await expect(
+    page.getByText("Your agent recommends. You decide."),
+  ).toBeVisible();
+  await expect(page.locator(".launcher-collaboration-mark")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /Play with Bots/ })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Play with Friends/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: /See how Pocket works/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Host a game/ }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: /Join with a code/ }),
+  ).toHaveCount(0);
   await expect(page.locator(".game-shell, .poker-table")).toHaveCount(0);
   expect(
     await page.evaluate(async () =>
@@ -55,9 +74,31 @@ test("the choice-first launcher stays idle and preserves setup drafts", async ({
   expect(requests.some((url) => url.includes("/api/rooms"))).toBe(false);
   expect(requests.some((url) => url.includes("/auth/v1/signup"))).toBe(false);
 
-  const hostTrigger = page.getByRole("button", { name: /Host a Game/ });
-  const joinTrigger = page.getByRole("button", { name: /Join with a Code/ });
-  await hostTrigger.click();
+  const friendsTrigger = page.getByRole("button", {
+    name: /Play with Friends/,
+  });
+  await friendsTrigger.focus();
+  await page.keyboard.press("Enter");
+  await expect(friendsTrigger).toHaveAttribute("aria-expanded", "true");
+  await expect(
+    page.getByText(
+      "Host or join a private table. Each player can bring their own agent.",
+    ),
+  ).toBeVisible();
+  const hostTrigger = page.getByRole("button", { name: /Host a game/ });
+  const joinTrigger = page.getByRole("button", { name: /Join with a code/ });
+  await expect(hostTrigger).toBeVisible();
+  await expect(joinTrigger).toBeVisible();
+
+  await page.keyboard.press("Enter");
+  await expect(friendsTrigger).toHaveAttribute("aria-expanded", "false");
+  await expect(hostTrigger).toHaveCount(0);
+  await page.keyboard.press("Enter");
+  await expect(friendsTrigger).toHaveAttribute("aria-expanded", "true");
+
+  await page.keyboard.press("Tab");
+  await expect(hostTrigger).toBeFocused();
+  await page.keyboard.press("Enter");
   await expect(hostTrigger).toHaveAttribute("aria-expanded", "true");
   await expect(page.locator("#host-display-name")).toBeFocused();
   await page.locator("#host-display-name").fill("Morgan");
@@ -88,8 +129,8 @@ test("the choice-first launcher stays idle and preserves setup drafts", async ({
   await joinTrigger.click();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole("link", { name: /Play with Bots/ })).toBeVisible();
-  await expect(hostTrigger).toBeVisible();
-  await expect(joinTrigger).toBeVisible();
+  await expect(friendsTrigger).toBeVisible();
+  await expect(page.getByRole("link", { name: /See how Pocket works/ })).toBeVisible();
   const hasOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );
@@ -105,7 +146,7 @@ test("the About page explains WebMCP without initializing a seat", async ({
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
-  await page.getByRole("link", { name: "About Pocket" }).click();
+  await page.getByRole("link", { name: /See how Pocket works/ }).click();
 
   await expect(page).toHaveURL(/\/about$/);
   await expect(

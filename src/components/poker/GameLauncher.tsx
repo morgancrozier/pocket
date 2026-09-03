@@ -22,6 +22,7 @@ function roomErrorMessage(payload: RoomResponse, fallback: string): string {
 
 export function GameLauncher() {
   const router = useRouter();
+  const [friendsOpen, setFriendsOpen] = useState(false);
   const [activeSetup, setActiveSetup] = useState<SetupMode | null>(null);
   const [hostName, setHostName] = useState("");
   const [joinName, setJoinName] = useState("");
@@ -47,6 +48,11 @@ export function GameLauncher() {
   function toggleSetup(mode: SetupMode) {
     if (submitting) return;
     setActiveSetup((current) => (current === mode ? null : mode));
+  }
+
+  function toggleFriends() {
+    if (submitting) return;
+    setFriendsOpen((current) => !current);
   }
 
   async function createRoom(event: React.FormEvent) {
@@ -119,33 +125,25 @@ export function GameLauncher() {
     <main className="launcher-page">
       <div className="launcher-ambient" aria-hidden="true" />
       <div className="launcher-shell">
-        <header className="launcher-brand">
-          <h1>Pocket</h1>
-          <p>Every seat has two minds.</p>
-          <Link className="launcher-about-link" href="/about">
-            About Pocket <span aria-hidden="true">↗</span>
-          </Link>
-        </header>
-
         <div className="launcher-layout">
           <section className="launcher-intro" aria-labelledby="launcher-title">
+            <header className="launcher-brand">
+              <h1>Pocket</h1>
+              <p>Every seat has two minds.</p>
+            </header>
             <span className="launcher-kicker">Play-money Texas Hold&apos;em</span>
             <h2 id="launcher-title">Bring your own AI to the table.</h2>
-            <p>
-              Pocket gives your browser agent a seat-safe view of the hand. It
-              can return a recommendation, but only you can choose and play the
-              poker action.
+            <p className="launcher-body">
+              Pocket uses WebMCP to give your browser agent a seat-safe view of
+              the live hand. It can reason and send advice back to the table,
+              but you still make every move.
             </p>
-            <div className="launcher-table-mark" aria-hidden="true">
-              <span className="launcher-seat-mark seat-mark-top" />
-              <span className="launcher-seat-mark seat-mark-right" />
-              <span className="launcher-seat-mark seat-mark-bottom" />
-              <span className="launcher-seat-mark seat-mark-left" />
-              <span className="launcher-pot-mark">P</span>
-            </div>
+            <p className="launcher-principle">
+              Your agent recommends. You decide.
+            </p>
             <p className="launcher-trust">
               Play money <span aria-hidden="true">·</span> No account needed
-              <span aria-hidden="true">·</span> Your agent. Your decision.
+              <span aria-hidden="true">·</span> No built-in AI
             </p>
           </section>
 
@@ -160,8 +158,8 @@ export function GameLauncher() {
                 <span className="launcher-choice-copy">
                   <strong>Play with Bots</strong>
                   <small>
-                    Sit down immediately, ask your agent, and make the first
-                    decision yourself. Bots fill the other seats.
+                    The fastest way to try Pocket: sit down, ask your agent, and
+                    make the first decision yourself. Bots fill the other seats.
                   </small>
                 </span>
                 <span className="launcher-choice-arrow" aria-hidden="true">
@@ -174,134 +172,178 @@ export function GameLauncher() {
               <button
                 className="launcher-choice-trigger"
                 type="button"
-                aria-expanded={activeSetup === "host"}
-                aria-controls="host-game-setup"
+                aria-expanded={friendsOpen}
+                aria-controls="friends-game-setup"
                 disabled={submitting !== null}
-                onClick={() => toggleSetup("host")}
+                onClick={toggleFriends}
               >
                 <span className="launcher-choice-number">02</span>
                 <span className="launcher-choice-copy">
-                  <strong>Host a Game</strong>
+                  <strong>Play with Friends</strong>
                   <small>
-                    Open a private table for one guest. Bots fill the rest.
+                    Host or join a private table. Each player can bring their
+                    own agent.
                   </small>
                 </span>
                 <span className="launcher-choice-arrow" aria-hidden="true">
-                  {activeSetup === "host" ? "−" : "+"}
+                  {friendsOpen ? "−" : "+"}
                 </span>
               </button>
-              {activeSetup === "host" ? (
-                <form
-                  id="host-game-setup"
-                  className="launcher-form"
-                  onSubmit={createRoom}
-                >
-                  <label htmlFor="host-display-name">
-                    Your name
-                    <input
-                      ref={hostNameRef}
-                      id="host-display-name"
-                      name="displayName"
-                      value={hostName}
-                      maxLength={24}
-                      autoComplete="nickname"
-                      placeholder="Morgan"
-                      required
-                      disabled={submitting !== null}
-                      onChange={(event) => {
-                        setHostName(event.target.value);
-                        setHostError(null);
-                      }}
-                    />
-                  </label>
-                  <button
-                    className="primary-button launcher-submit"
-                    disabled={submitting !== null}
-                    type="submit"
+              {friendsOpen ? (
+                <div id="friends-game-setup" className="launcher-friends-panel">
+                  <div
+                    className="launcher-friend-actions"
+                    role="group"
+                    aria-label="Choose a multiplayer action"
                   >
-                    {submitting === "host" ? "Opening table…" : "Create table"}
-                  </button>
-                  <span className="launcher-form-message" role="alert">
-                    {hostError}
-                  </span>
-                </form>
+                    <button
+                      className="launcher-friend-action"
+                      type="button"
+                      aria-expanded={activeSetup === "host"}
+                      aria-controls="host-game-setup"
+                      disabled={submitting !== null}
+                      onClick={() => toggleSetup("host")}
+                    >
+                      <span>
+                        <strong>Host a game</strong>
+                        <small>Open a private table</small>
+                      </span>
+                      <i aria-hidden="true">
+                        {activeSetup === "host" ? "−" : "+"}
+                      </i>
+                    </button>
+                    <button
+                      className="launcher-friend-action"
+                      type="button"
+                      aria-expanded={activeSetup === "join"}
+                      aria-controls="join-game-setup"
+                      disabled={submitting !== null}
+                      onClick={() => toggleSetup("join")}
+                    >
+                      <span>
+                        <strong>Join with a code</strong>
+                        <small>Take the second seat</small>
+                      </span>
+                      <i aria-hidden="true">
+                        {activeSetup === "join" ? "−" : "+"}
+                      </i>
+                    </button>
+                  </div>
+
+                  {activeSetup === "host" ? (
+                    <form
+                      id="host-game-setup"
+                      className="launcher-form"
+                      onSubmit={createRoom}
+                    >
+                      <label htmlFor="host-display-name">
+                        Your name
+                        <input
+                          ref={hostNameRef}
+                          id="host-display-name"
+                          name="displayName"
+                          value={hostName}
+                          maxLength={24}
+                          autoComplete="nickname"
+                          placeholder="Morgan"
+                          required
+                          disabled={submitting !== null}
+                          onChange={(event) => {
+                            setHostName(event.target.value);
+                            setHostError(null);
+                          }}
+                        />
+                      </label>
+                      <button
+                        className="primary-button launcher-submit"
+                        disabled={submitting !== null}
+                        type="submit"
+                      >
+                        {submitting === "host"
+                          ? "Opening table…"
+                          : "Create table"}
+                      </button>
+                      <span className="launcher-form-message" role="alert">
+                        {hostError}
+                      </span>
+                    </form>
+                  ) : null}
+
+                  {activeSetup === "join" ? (
+                    <form
+                      id="join-game-setup"
+                      className="launcher-form launcher-join-form"
+                      onSubmit={joinRoom}
+                    >
+                      <label htmlFor="join-room-code">
+                        Room code
+                        <input
+                          ref={joinCodeRef}
+                          id="join-room-code"
+                          name="roomCode"
+                          value={roomCodeDraft}
+                          autoComplete="off"
+                          autoCapitalize="characters"
+                          spellCheck={false}
+                          placeholder="ABCD2345"
+                          required
+                          disabled={submitting !== null}
+                          onChange={(event) => {
+                            setRoomCodeDraft(event.target.value);
+                            setJoinError(null);
+                          }}
+                        />
+                      </label>
+                      <label htmlFor="join-display-name-home">
+                        Your name
+                        <input
+                          id="join-display-name-home"
+                          name="displayName"
+                          value={joinName}
+                          maxLength={24}
+                          autoComplete="nickname"
+                          placeholder="Alex"
+                          required
+                          disabled={submitting !== null}
+                          onChange={(event) => {
+                            setJoinName(event.target.value);
+                            setJoinError(null);
+                          }}
+                        />
+                      </label>
+                      <button
+                        className="primary-button launcher-submit"
+                        disabled={submitting !== null}
+                        type="submit"
+                      >
+                        {submitting === "join" ? "Taking seat…" : "Join table"}
+                      </button>
+                      <span className="launcher-form-message" role="alert">
+                        {joinError}
+                      </span>
+                    </form>
+                  ) : null}
+                </div>
               ) : null}
             </div>
 
             <div className="launcher-choice">
-              <button
+              <Link
                 className="launcher-choice-trigger"
-                type="button"
-                aria-expanded={activeSetup === "join"}
-                aria-controls="join-game-setup"
-                disabled={submitting !== null}
-                onClick={() => toggleSetup("join")}
+                href="/about"
               >
                 <span className="launcher-choice-number">03</span>
                 <span className="launcher-choice-copy">
-                  <strong>Join with a Code</strong>
+                  <strong>See how Pocket works</strong>
                   <small>
-                    Enter the code from your host and take the second seat.
+                    See how WebMCP gives an external agent a seat-safe view of
+                    the hand while you keep control of every move.
                   </small>
                 </span>
                 <span className="launcher-choice-arrow" aria-hidden="true">
-                  {activeSetup === "join" ? "−" : "+"}
+                  ↗
                 </span>
-              </button>
-              {activeSetup === "join" ? (
-                <form
-                  id="join-game-setup"
-                  className="launcher-form launcher-join-form"
-                  onSubmit={joinRoom}
-                >
-                  <label htmlFor="join-room-code">
-                    Room code
-                    <input
-                      ref={joinCodeRef}
-                      id="join-room-code"
-                      name="roomCode"
-                      value={roomCodeDraft}
-                      autoComplete="off"
-                      autoCapitalize="characters"
-                      spellCheck={false}
-                      placeholder="ABCD2345"
-                      required
-                      disabled={submitting !== null}
-                      onChange={(event) => {
-                        setRoomCodeDraft(event.target.value);
-                        setJoinError(null);
-                      }}
-                    />
-                  </label>
-                  <label htmlFor="join-display-name-home">
-                    Your name
-                    <input
-                      id="join-display-name-home"
-                      name="displayName"
-                      value={joinName}
-                      maxLength={24}
-                      autoComplete="nickname"
-                      placeholder="Alex"
-                      required
-                      disabled={submitting !== null}
-                      onChange={(event) => {
-                        setJoinName(event.target.value);
-                        setJoinError(null);
-                      }}
-                    />
-                  </label>
-                  <button
-                    className="primary-button launcher-submit"
-                    disabled={submitting !== null}
-                    type="submit"
-                  >
-                    {submitting === "join" ? "Taking seat…" : "Join table"}
-                  </button>
-                  <span className="launcher-form-message" role="alert">
-                    {joinError}
-                  </span>
-                </form>
-              ) : null}
+              </Link>
             </div>
           </section>
         </div>
