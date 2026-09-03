@@ -2,193 +2,189 @@
 
 > **Every seat has two minds.**
 
-Pocket is a multiplayer poker experiment exploring what happens when every
-player can bring their own AI agent into a shared web application.
+Pocket is a playable multiplayer Texas Hold'em game where every player can bring their own AI agent to the table.
+
+**[Play Pocket](https://pocket-eight-rho.vercel.app) · [How it works](https://pocket-eight-rho.vercel.app/about)**
 
 Built for the WebMCP Challenge.
 
-**[Live demo](https://pocket-eight-rho.vercel.app) · [How it works](https://pocket-eight-rho.vercel.app/about)**
+> **Same table. Different players. Different private information. Different personal agents. Different private context. One authoritative application.**
+>
+> WebMCP connects them without requiring Pocket to own everyone's intelligence—or giving an agent control of the game.
 
-> Pocket isn't trying to prove that AI can play poker. It's exploring what the
-> web becomes when every user can bring their own AI into a shared application.
+![Pocket's launcher inviting players to bring their own AI to bot play or a shared table](assets/readme/pocket-launcher.png)
 
-## What is Pocket?
+## The idea
 
-Pocket is a play-money Texas Hold'em game designed around a different model of
-AI integration. There is no Pocket chatbot and no Pocket-selected model.
-Instead, the game exposes live, player-safe state and capabilities through
-WebMCP. A compatible personal agent can understand the current hand, reason
-about the decision, and send a recommendation back into the game.
+Most web applications have an interface for people. When an AI agent tries to help, it often has to reconstruct what is happening from the page or ask the user to explain it.
 
-The player remains in control of the final action. Two people at the same table
-can use different agents, models, context, preferences, and reasoning styles
-while Pocket remains the neutral shared environment between them.
+Pocket gives the agent a proper interface too.
 
-## Why WebMCP?
+During a hand, Pocket can give a player's agent authoritative game state, the exact legal actions, that player's private cards, and the history of how the hand developed. The agent can combine those facts with its own private user context, reason about the decision, and send a recommendation back into the live game.
 
-A poker decision depends on live application state, private player state, legal
-actions, recent history, and context that changes from one turn to the next.
-Without a structured interface, a player has to copy cards and stack sizes,
-send screenshots, describe prior betting, and repeat the process whenever the
-hand changes.
+But Pocket does not choose or own the agent.
 
-WebMCP lets an external agent reason from Pocket's authoritative current game
-rather than from a manually reconstructed description. Pocket provides the
-environment; the user chooses the intelligence.
+### Pocket knows the table. Your agent can know you.
+
+Pocket is authoritative about:
+
+- the board, pot, stacks, and positions;
+- whose turn it is and how the hand reached that point;
+- which actions and raise totals are legal;
+- and which cards a particular player is allowed to see.
+
+A player's own agent can bring a different kind of context:
+
+- how that person likes to play;
+- strategies they are working on;
+- previous hands they have discussed;
+- personal notes or observations;
+- and preferences about risk or style.
+
+Pocket does not need to collect or permanently store that personal context just to offer useful assistance. The application provides what **it** knows. The user brings the intelligence and context that belongs to **them**.
+
+## How WebMCP fits
+
+Pocket exposes three focused WebMCP tools:
+
+| Tool | Purpose |
+| --- | --- |
+| `get_current_situation` | Returns the exact seat-safe situation: private cards, public board, pot, stacks, positions, current actor, and legal actions with precise limits. |
+| `get_hand_history` | Returns Pocket's authoritative, player-safe history of how the current hand developed. |
+| `stage_recommendation` | Sends a structured, version-bound recommendation into Pocket's Copilot panel without playing the move. |
+
+Together they create a complete application → agent → application loop:
+
+```text
+Pocket supplies authoritative, seat-safe state
+                    ↓
+agent combines it with the user's private context
+                    ↓
+agent reasons about the decision
+                    ↓
+agent stages a recommendation in Pocket
+                    ↓
+human follows, overrides, or dismisses it
+                    ↓
+human commits the poker action
+```
+
+The agent deliberately has **no tool for folding, checking, calling, betting, raising, or going all-in**.
+
+Pocket is built around a copilot, not an autopilot.
+
+![Pocket's live table showing seat-safe history, a recorded stage_recommendation WebMCP call, highlighted legal human action, and version-bound advice in the Private copilot](assets/readme/pocket-copilot.png)
+
+*Pocket supplies the live facts and legal actions. The agent stages advice in the interface. The human still makes the move.*
 
 ## Why poker?
 
-Poker combines properties that usually appear separately in agentic software:
+Poker makes several difficult agent-interaction problems visible at once:
 
-- **Live shared state** — the board, pot, stacks, and betting update
-  continuously.
-- **Private state** — each player has information that must never reach another
-  player's agent.
-- **Incomplete information** — useful assistance requires reasoning, not just
-  retrieval.
-- **Independent participants** — every player has different goals and may use a
-  different agent.
-- **Constrained actions** — legal decisions change with the state of the hand.
-- **Human judgment** — advice can help without requiring the agent to take
-  control.
+- **Live shared state** — the board, pot, stacks, and betting change continuously.
+- **Private state** — every player has information that other players and their agents must not receive.
+- **Different participants** — several people share one application while using different agents and private context.
+- **History** — a useful decision often depends on how the hand developed.
+- **Exact rules** — legal actions come from the game, including precise numerical raise limits.
+- **Changing state** — advice can become stale while an agent is still thinking.
+- **Incomplete information** — assistance requires reasoning rather than simple retrieval.
+- **Human judgment** — the agent can help without taking control.
 
-## Humans still play the game
+Those are not only poker problems. Poker just makes them unusually easy to see.
 
-Pocket intentionally separates recommendation from execution. The agent can
-inspect the state its seat is allowed to see and call `stage_recommendation` to place
-one structured recommendation into the interface. It cannot silently take over
-the player's seat.
+## What Pocket demonstrates
 
-The player can follow the recommendation, change it, dismiss it, or make a
-different move. The website owns the game. The player owns the intelligence
-they bring to it.
+### One application can remain authoritative
 
-This repository contains a deliberately narrow **Gate 3 multiplayer room with
-Gate 4 interaction polish**: one or two anonymous human browser
-sessions occupy fixed seats, bots fill the room, and each external personal
-agent receives only its browser seat's safe state and local advice surface.
+The agent does not have to infer the pot, interpret buttons, calculate legal raises, or trust a description typed by the player. Those facts come from the same game state that powers Pocket's interface.
 
-Pocket was created during the 2026 WebMCP Challenge submission period. Its
-dated Git history records the implementation from the first interaction slice
-through the durable demo.
+### Every agent can receive a different safe view
 
-## What works now
+The poker engine knows every card. A player's copilot should not.
 
-- A choice-first launcher for bot play, private hosting, or joining by code;
-  the homepage creates no session, table state, or WebMCP tools before the
-  visitor chooses a mode.
-- A static About page that explains the WebMCP handoff, seat-safe privacy, and
-  human-only execution boundary without initializing Auth or a game.
-- A four-seat, play-money table backed by a server-authoritative Hold'em engine.
-- An eight-character room link with a fixed creator seat, optional guest seat,
-  same-session tab recovery, and duplicate display-name support.
-- Independent per-seat private projections synchronized by a membership-scoped
-  Supabase Realtime revision signal and authoritative refetch.
-- Action UUID replay protection, mismatched-key rejection, mutation leases,
-  and one atomic human-plus-bot revision.
-- Eliminated members remain spectator-safe room members with public read tools,
-  while bots stop if no funded human remains.
-- Real dealing, legal actions, street progression, showdown, and settlement.
-- A quick tournament format: four 40-chip stacks, 1/2 blinds for hands 1–3,
-  2/4 for hands 4–6, and 4/8 thereafter.
-- A reconnect-safe anonymous Supabase Auth identity that server-side code maps
-  to the fixed human seat. The client never supplies a player id.
-- A Supabase repository for the opaque authoritative command envelope.
-- A version-bound mutation claim and compare-and-swap commit so concurrent
-  same-version actions produce one accepted transition and one conflict.
-- One atomic committed revision containing the accepted human action and all
-  resulting bot actions.
-- A player-safe response containing the hero's cards and legitimately revealed
-  showdown hands, but never the deck or folded/hidden opponent cards.
-- `get_current_situation` registered through WebMCP.
-- `get_hand_history` registered through WebMCP.
-- `stage_recommendation` remains registered with the table and validates the current turn when called.
-- `stage_recommendation` updates the visible table but never plays the move.
-- `stage_recommendation` requires the exact `stateVersion` returned by the current
-  situation read and rejects stale or no-longer-legal advice.
-- Recommendations may show a bounded, display-safe rationale and optional
-  agent-provided confidence as context, not as certainty. A same-state
-  recommendation can visibly replace the previous one after the human supplies
-  new private context.
-- Hand and state versions expire stale recommendations.
-- A still-current recommendation survives refresh in browser session storage;
-  a real table revision removes it.
-- Raise recommendations preview their final street total in the normal raise
-  control. The matching existing action button is labeled **Agent pick** until
-  the player edits that total or chooses another action.
-- After the server accepts the human's action, a client-only receipt records
-  whether the recommendation was followed or overridden. It survives later
-  revisions of that hand, never enters the poker API or WebMCP output, and is
-  cleared for the next hand or Play again.
-- Deterministic mixed-action bots that check, call, fold, and size legal bets or
-  raises without being presented as poker expertise.
-- Automatic next-hand progression after a short result pause until the human
-  is eliminated or is the only funded player.
-- Explicit win/loss results and a human-only **Play again** action that resets
-  the tournament while keeping the authenticated game id and increasing the
-  state version.
-- Raw whole-chip bet/raise drafting with visible legal bounds, a non-submitting
-  Max control, and intentional submit-only validation.
-- A built-in development panel that can call registered WebMCP tools.
-- Deterministic tests for tournament completion, blind escalation, bot
-  legality, persistence reconstruction, concurrency, restart, settlement,
-  chip conservation, privacy, and the human-only execution boundary.
-- Focused Playwright flows for responsive rendering, raw amount drafting,
-  same-state advice replacement, rejected-action behavior, followed and
-  overridden receipts, terminal results, and restart.
-- The original mock interaction at `/play?mode=mock` as an explicit fallback.
-- Reviewed Supabase migrations for private state and Gate 2 mutation claims.
-- Full product spec, build gates, and an initial Codex prompt.
+Pocket derives a seat-safe projection for each player, so two agents connected to the same table can receive different private information while sharing the same public game.
 
-## Screenshots
+Opponent hole cards stay hidden unless legitimately revealed at showdown. The raw deck and opaque engine state never enter browser or WebMCP responses.
 
-### Choice-first launcher
+### Personal context can stay with the user's agent
 
-![Pocket's quiet choice-first launcher for bot play, private hosting, or joining by room code](docs/submission/screenshots/launcher.png)
+Pocket supplies the facts of the game while the user's chosen agent supplies preferences, memory, strategy, or other context the user has chosen to share.
 
-### Production bot table
+The application does not need to become the permanent home for all of that information.
 
-![Pocket's production four-seat quick-tournament table with WebMCP ready, play-money blinds, cards, stacks, and human action controls](docs/submission/screenshots/table.png)
+### Agent interaction can go both directions
 
-*Your agent can understand the live hand without copying cards, screenshots,
-or game state into a separate chat.*
+WebMCP is not only used to retrieve state. `stage_recommendation` lets the agent participate visibly by returning advice to the interface where the player is making the decision.
 
-### Recommendation before human confirmation
+### Agent output can have a lifetime
 
-![An external agent's version-bound poker recommendation with confidence, a highlighted matching human action, Dismiss, and the seat-safe advice boundary](docs/submission/screenshots/copilot-recommendation.png)
+Every recommendation belongs to a specific game, hand, and state version. If the table changes before the advice arrives, Pocket rejects it instead of presenting stale guidance as current.
 
-*WebMCP lets a player's own agent send a structured recommendation back into
-the live game while the human remains in control.*
+### Capability does not have to mean control
 
-### Visible human override receipt
+The agent can understand the situation, reason about it, and participate in the product while the consequential action remains with the person.
 
-![Pocket confirming that the human overrode the copilot recommendation after the server accepted the chosen poker action](docs/submission/screenshots/recommendation-receipt.png)
+## What works
 
-### Two authenticated seats, one synchronized table
+Pocket is a playable application, not a mock interface wrapped around a tool demo. It includes:
 
-![Two Pocket browser contexts showing stable distinct human seats and synchronized public table state](docs/submission/screenshots/multiplayer.png)
+- complete play-money Texas Hold'em hands against bots;
+- multiplayer rooms with up to two human players and bot-filled seats;
+- independent seat-safe private state for every player;
+- real betting, dealing, street progression, showdown, and settlement;
+- persistent, reconnect-safe games and synchronized public table state;
+- deterministic bot opponents and quick-tournament blind progression;
+- version-bound recommendations with stale-advice rejection;
+- visible follow, override, and dismissal behavior;
+- responsive desktop and mobile layouts;
+- an explicit no-Supabase mock route for reliable exploration;
+- and automated coverage for the game, privacy boundaries, multiplayer behavior, WebMCP contracts, and core browser flows.
 
-*Every seat can use a different agent. Pocket provides the shared environment,
-not the shared intelligence.*
+## Try it
 
-### Terminal result and mobile layout
+Open the **[live demo](https://pocket-eight-rho.vercel.app)** and choose Play with Bots, Host a Game, or Join with a Code.
 
-![A completed Pocket tournament showing the winner, legitimate showdown cards, and the human-only Play again action](docs/submission/screenshots/terminal-result.png)
+For a deterministic table that does not require Supabase, open:
 
-<img src="docs/submission/screenshots/mobile.png" width="320" alt="Pocket's production poker table and controls at a 390-pixel mobile viewport without horizontal overflow" />
+```text
+https://pocket-eight-rho.vercel.app/play?mode=mock
+```
 
-## Start here
+In ChatGPT's in-app browser or another WebMCP-enabled client, try:
 
-Pocket requires Node.js 22 or newer. For the engine-backed demo, create a
-Supabase project, enable anonymous sign-ins, review and apply the migrations in
-`supabase/migrations`, and copy the three required values into `.env.local`.
+> Analyze the current Pocket hand and recommend my best action. Explain your reasoning briefly and send the recommendation back to the game.
 
-### Supabase setup
+The expected sequence is:
 
-1. Create a Supabase project running Postgres 17.
-2. In Authentication settings, enable anonymous sign-ins.
-3. Install the Supabase CLI, review all migration files, then link and apply
-   them:
+1. The agent reads `get_current_situation`.
+2. It optionally reads `get_hand_history`.
+3. It reasons using Pocket's facts and any context provided by the player.
+4. It calls `stage_recommendation` with the exact current `stateVersion`.
+5. Pocket displays the recommendation.
+6. The human chooses the actual poker action.
+
+## Run locally
+
+Pocket requires Node.js 22 or newer.
+
+### Fastest path: mock table
+
+The mock route requires no Supabase project:
+
+```bash
+npm ci
+npm run dev
+```
+
+Open `http://localhost:3000/play?mode=mock`.
+
+### Bot play and multiplayer
+
+The full application uses Supabase for anonymous authentication, authoritative persistence, multiplayer rooms, and revision notifications.
+
+1. Create a Supabase project and enable anonymous sign-ins.
+2. Install the Supabase CLI.
+3. Review and apply the migrations in `supabase/migrations`:
 
    ```bash
    supabase login
@@ -196,149 +192,89 @@ Supabase project, enable anonymous sign-ins, review and apply the migrations in
    supabase db push
    ```
 
-4. Copy `.env.example` to `.env.local`. Fill in the project URL, publishable
-   key, and a server-only secret key from the Supabase API Keys settings.
+4. Create the local environment file and provide the three values described in `.env.example`:
 
-Never commit `.env.local`. The publishable key is designed for browser use;
-the secret key bypasses RLS and must stay in trusted server environments.
+   ```bash
+   cp .env.example .env.local
+   npm ci
+   npm run dev
+   ```
 
-```bash
-cp .env.example .env.local
-npm ci
-npm run dev
+Required variables:
+
+```text
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
+SUPABASE_SECRET_KEY=
 ```
 
-Open `http://localhost:3000`. The launcher offers **Play with Bots**, **Host a
-Game**, and **Join with a Code**. Bot play runs at `/play`; multiplayer waiting
-rooms and tables use `/table/[roomCode]`.
+`SUPABASE_SECRET_KEY` is server-only and must never use a `NEXT_PUBLIC_` name or be committed to source control.
 
-The launcher itself does not create an anonymous session or load a game. Bot
-play, hosting, and joining require a Supabase project or local runtime with
-anonymous sign-ins enabled, migrations `0001` through `0003` applied, and all
-three Supabase environment values configured. The secret key is server-only
-and must never use a `NEXT_PUBLIC_` name.
+## WebMCP behavior
 
-Open `/play?mode=mock` for the preserved fallback, which requires no Supabase
-configuration. Legacy `/?mode=mock` links redirect there. If the storage/auth
-path is unavailable, the bot table also falls back safely rather than exposing
-a server error. Add `debug=1` to the play URL to use the **Development spike
-controls** under the table to inspect the registered tools or inject a
-recommendation.
+Pocket checks for `document.modelContext` at runtime and degrades cleanly when WebMCP is unavailable. In a compatible browser environment, the table header reports **WebMCP tools ready**.
 
-### Release-candidate evidence boundary
+Tool registration follows the mounted table, while each invocation reads the latest state. `stage_recommendation` validates that it is still the human player's turn and that its `stateVersion`, action, and optional amount still match the current legal decision.
 
-The deterministic and browser suites verify the release-candidate contract
-without weakening the production route. The retained submission evidence is in
-`docs/PRIVATE_SUBMISSION_PACKAGE.md`. A concise live judging path is in
-`docs/submission/TESTING_INSTRUCTIONS.md`.
+The same player-safe projection feeds both the visible interface and the WebMCP tools. The agent does not receive a privileged copy of the game behind the scenes.
 
-An isolated local Supabase runtime also passed anonymous reconnect, real
-multi-hand engine play, multiplayer membership, authenticated Realtime,
-seat-specific privacy, idempotent replay, expired-lease recovery, terminal
-restart, same-version concurrency, chip conservation, and browser-role denial.
-Each verification case removes the users and games it creates.
+## Architecture
 
-Migration `0003` and the same repository checks are also verified against the
-linked managed Supabase project. An explicitly opted-in two-browser run from an
-isolated local production server passed against that managed backend and
-removed its generated room and anonymous users afterward.
+```text
+authoritative poker engine
+          ↓
+server-side game service and persistence
+          ↓
+seat-safe player projection
+          ├──→ Pocket interface
+          └──→ WebMCP tools
+                    ↓
+             personal agent
+                    ↓
+        staged recommendation only
+                    ↓
+             human decision
+```
 
-The current public demo runs at
-[`pocket-eight-rho.vercel.app`](https://pocket-eight-rho.vercel.app). Before
-submission, confirm that this deployment and the public repository point to the
-same audited release commit. Repository publication, video upload, and Devpost
-submission remain explicit external gates until the final evidence packet is
-approved.
+The engine is isolated behind a narrow adapter. Server routes validate identity, state version, and legal actions before committing a transition. Browser clients receive only whitelisted player-safe data.
 
-## Vercel deployment
+## Technology
 
-The existing Vercel project uses the detected Next.js install, build, and
-output settings. `vercel.json` places server functions in Portland, close to
-the Oregon Supabase project; static assets remain globally delivered.
+- Next.js, React, and TypeScript
+- Supabase Auth, Postgres, and Realtime
+- `@hivetech/poker-engine` behind a server-side adapter
+- Zod for runtime validation
+- Vitest and Playwright for automated verification
+- Vercel for the public application
 
-Configure these project environment variables for Production and any trusted
-Preview branches:
+## Verification
 
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
-- `SUPABASE_SECRET_KEY` as a sensitive, server-only value
+Run the deterministic checks and production build with:
 
-Pocket does not use the Postgres password or direct/session-pooler URLs at
-runtime. Do not add them to Vercel or source control. Add
-`WEBMCP_ORIGIN_TRIAL_TOKEN` only when a deployed origin specifically requires
-an origin-trial token.
+```bash
+npm run check
+npm run build
+```
 
-Then open:
-
-1. `docs/CODEX_INITIAL_PROMPT.md`
-2. `docs/BUILD_PLAN.md`
-3. `docs/PRODUCT_SPEC.md`
-
-Use the Codex prompt only when reconstructing the original implementation
-sequence; it is not required to run Pocket.
-
-## WebMCP testing
-
-The app checks for `document.modelContext` at runtime and degrades cleanly when WebMCP is unavailable.
-
-For actual tool testing, use ChatGPT's in-app browser, which supports WebMCP out
-of the box. Alternatively, use Google Chrome 149 or later, enable
-`chrome://flags/#enable-webmcp-testing`, restart Chrome, and use the Model
-Context Tool Inspector. A successful environment shows **WebMCP tools ready**
-in the header. Chrome's WebMCP protocol should enumerate only
-`get_current_situation`, `get_hand_history`, and—while it is the human's
-turn—`stage_recommendation`.
-
-The quickest judge prompt is:
-
-> Analyze the current Pocket hand and recommend my best action. Explain your
-> reasoning briefly and send the recommendation back to the game.
-
-The app sends `Origin-Agent-Cluster: ?1`. Set `WEBMCP_ORIGIN_TRIAL_TOKEN` when your deployed origin requires a token.
-
-## License
-
-Pocket is available under the MIT License. See `LICENSE`.
-
-## Engine boundary
-
-`poker-engine-ts` was inspected and rejected after deterministic execution
-exposed incorrect blind accounting and an all-in blind lifecycle failure.
-Pocket uses `@hivetech/poker-engine` behind a single adapter instead. The exact
-evidence and decision are in `docs/ENGINE_SPIKE.md`.
-
-The authoritative command envelope contains the complete deck and must remain
-inside the server boundary. Browser code, API payloads, logs, and WebMCP receive
-only Pocket's whitelisted `PokerSituation` projection.
+Browser scenarios live in `tests/e2e`. Multiplayer browser verification should use an isolated local Supabase environment unless managed-backend testing has been explicitly authorized.
 
 ## Repository map
 
 ```text
-src/
-  app/                         Next.js app
-  components/poker/            Current interaction spike
-  lib/poker/                    Engine adapter, demo + room services/repositories, safe projections
-  lib/webmcp/                   WebMCP registration hook
-  lib/supabase/                 Trusted Gate 2 Auth/admin clients
-  types/                        WebMCP + poker types
-supabase/migrations/            Private state, mutation claims, rooms, operations, revisions
-docs/                           Product spec, architecture, plan, Codex prompt
+src/app/                 Pages and authoritative API routes
+src/components/poker/    Table, seats, controls, history, and Copilot UI
+src/lib/poker/           Engine adapter, game services, persistence, and safe projections
+src/lib/webmcp/          WebMCP contracts and registration lifecycle
+src/lib/supabase/        Browser and server Supabase clients
+src/types/               Poker and WebMCP types
+supabase/migrations/     Persistence, concurrency, and multiplayer schema
+tests/e2e/               Browser-level product and privacy flows
 ```
 
-## Critical product boundary
+## License
 
-Pocket should never quietly become autonomous agent poker.
+Pocket is open source under the MIT License. See `LICENSE`.
 
-```text
-agent reads safe live state
-        ↓
-agent reasons with private user context
-        ↓
-agent places recommendation in Pocket
-        ↓
-human follows, overrides, or dismisses it
-        ↓
-human commits the poker action
-```
+---
 
-That loop is the project.
+**Pocket supplies the truth. Your agent brings the context and intelligence. You make the move.**

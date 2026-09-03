@@ -34,3 +34,11 @@ pnpm-debug.log*
 
 # typescript
 *.tsbuildinfo
+
+
+/docs/
+/verification/
+/AGENTS.md
+/START_HERE.md
+/DESIGN.md
+/PRODUCT.md
