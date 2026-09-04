@@ -1009,6 +1009,13 @@ test("safe tournament UI replaces and follows advice through restart", async ({
   await page.getByRole("button", { name: "Call 4", exact: true }).click();
   await expect(page.getByRole("heading", { name: "You’re out" })).toBeVisible();
   await expect(
+    page.getByRole("status", {
+      name: /You’re out\. Tournament complete · Alex \+80 chips\./,
+    }),
+  ).toBeVisible();
+  await expect(page.locator('.player-seat[data-winner="true"]')).toHaveCount(1);
+  await expect(page.getByText("+80 chips", { exact: true })).toBeVisible();
+  await expect(
     page.getByRole("heading", { name: "Recommendation followed" }),
   ).toBeVisible();
   await expect(page.getByText("You confirmed Call 4.")).toBeVisible();
@@ -1018,6 +1025,9 @@ test("safe tournament UI replaces and follows advice through restart", async ({
   );
   await page.getByRole("button", { name: "Close full hand history" }).click();
   await expect(page.getByRole("button", { name: "Play again" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Deal next hand" }),
+  ).toHaveCount(0);
   expect(actionBodies).toEqual([
     { action: "call", expectedStateVersion: 18 },
   ]);

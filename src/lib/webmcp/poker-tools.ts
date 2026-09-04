@@ -536,7 +536,7 @@ export function createCurrentSituationTool({
   return {
     name: "get_current_situation",
     description:
-      "Read the authoritative, seat-safe current hand: hero cards, public board, stacks and commitments, action order, pot layers, exact next actor, legal actions, and public history. recentEvents rows follow context.eventFields. Forced posts are separate from voluntary actions. amountToCall is chips to add; bet/raise minTotal and maxTotal are final street totals (raise to X). Re-read after the table changes. stage_recommendation only succeeds on the hero's current turn.",
+      "Read authoritative, seat-safe state: hero cards, board, stacks, next actor, and legal actions. context.recentEvents contains only the final six normalized public betting/action events; rows follow context.eventFields. Use get_hand_history when context.totalActionCount exceeds context.recentEvents.length, or when earlier streets or action sequencing matter. Forced posts are separate from voluntary actions. amountToCall is chips to add; bet/raise totals mean raise to X. Re-read after changes.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -706,7 +706,7 @@ export function createHandHistoryTool({
   return {
     name: "get_hand_history",
     description:
-      "Read a size-bounded page of public chronology and showdown disclosures for the current hand. events rows follow eventFields. Forced posts and voluntary actions are separate; calls show chips added and bet/raise amounts are final street totals. Each response returns up to limit events in chronological order. Use beforeSequence while page.hasEarlier is true. This is optional because get_current_situation contains the immediate state.",
+      "Read a bounded, paginated public betting/action ledger for the current hand. Use it for full-hand, earlier-street, and betting-line analysis. Only the current hand is retrievable; compare its returned hand identity and stateVersion with get_current_situation. Rows follow eventFields; forced posts and voluntary actions are separate, calls show chips added, and bet/raise amounts are final street totals. Results are chronological; use beforeSequence while page.hasEarlier is true.",
     inputSchema: {
       type: "object",
       properties: {

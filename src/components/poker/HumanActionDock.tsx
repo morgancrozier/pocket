@@ -28,11 +28,14 @@ interface HumanActionDockProps {
   terminalAction?: {
     label: string;
     onClick: () => void;
+    status?: string;
+    progress?: number;
   } | null;
   playback?: {
     status: string;
     onSkip: () => void;
   } | null;
+  unavailableMessage?: string;
   onBetDraftChange: (value: string) => void;
   onCommit: (action: PokerActionType, amount?: number) => void;
   onSubmitSizedAction: () => void;
@@ -80,6 +83,7 @@ export function HumanActionDock({
   practiceFallback,
   terminalAction,
   playback,
+  unavailableMessage,
   onBetDraftChange,
   onCommit,
   onSubmitSizedAction,
@@ -497,23 +501,41 @@ export function HumanActionDock({
               ) : null}
 
               {terminalAction ? (
-                <button
-                  className="action-button action-restart is-contextual-primary"
-                  type="button"
-                  disabled={isSubmitting}
-                  onClick={terminalAction.onClick}
+                <div
+                  className={`terminal-action ${terminalAction.status ? "has-progress" : ""}`}
                 >
-                  {terminalAction.label}
-                </button>
+                  {terminalAction.status ? (
+                    <div className="terminal-progress" aria-hidden="true">
+                      <span>{terminalAction.status}</span>
+                      {typeof terminalAction.progress === "number" ? (
+                        <span className="terminal-progress-track">
+                          <span
+                            style={{
+                              transform: `scaleX(${terminalAction.progress})`,
+                            }}
+                          />
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <button
+                    className="action-button action-restart is-contextual-primary"
+                    type="button"
+                    disabled={isSubmitting}
+                    onClick={terminalAction.onClick}
+                  >
+                    {terminalAction.label}
+                  </button>
+                </div>
               ) : null}
 
               {!terminalAction && situation.legalActions.length === 0 ? (
                 <span className="actions-unavailable">
-                  {isSpectating
+                  {unavailableMessage ?? (isSpectating
                     ? "Actions are unavailable while spectating."
                     : situation.handResult
                       ? "The next hand is being prepared."
-                      : "Actions will appear when it is your turn."}
+                      : "Actions will appear when it is your turn.")}
                 </span>
               ) : null}
           </div>

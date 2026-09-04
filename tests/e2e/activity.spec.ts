@@ -1132,7 +1132,7 @@ test.describe("in-game activity clarity", () => {
     { label: "tall desktop", width: 1440, height: 1200, isWide: true },
     { label: "tall split screen", width: 900, height: 1252, isWide: false },
   ]) {
-    test(`${viewport.label} uses the available height without clipping the table`, async ({
+    test(`${viewport.label} fits the available height without clipping the table`, async ({
       page,
     }) => {
       await page.setViewportSize(viewport);
@@ -1182,9 +1182,9 @@ test.describe("in-game activity clarity", () => {
         };
       });
 
-      expect(
-        Math.abs(geometry.viewportHeight - geometry.pageBottom),
-      ).toBeLessThanOrEqual(48);
+      expect(geometry.pageBottom - geometry.viewportHeight).toBeLessThanOrEqual(
+        48,
+      );
       expect(geometry.hasHorizontalOverflow).toBe(false);
       expect(geometry.dock.bottom).toBeLessThanOrEqual(geometry.viewportHeight);
       expect(geometry.rail.bottom).toBeLessThanOrEqual(geometry.viewportHeight);
@@ -1209,6 +1209,88 @@ test.describe("in-game activity clarity", () => {
       }
     });
   }
+
+  test("wide video viewport keeps copilot evidence above the fold", async ({
+    page,
+  }) => {
+    await installWebMCPStub(page);
+    await page.setViewportSize({ width: 1608, height: 1136 });
+    await page.goto("/play?mode=mock");
+    await expect(page.getByText("WebMCP tools ready").first()).toBeVisible();
+
+    await page.evaluate(async () => {
+      const tools = await document.modelContext.getTools();
+      const situation = tools.find(
+        (candidate) => candidate.name === "get_current_situation",
+      );
+      const history = tools.find(
+        (candidate) => candidate.name === "get_hand_history",
+      );
+      const recommendation = tools.find(
+        (candidate) => candidate.name === "stage_recommendation",
+      );
+      if (!situation || !history || !recommendation) {
+        throw new Error("WebMCP tools are unavailable.");
+      }
+
+      await document.modelContext.executeTool(situation, {});
+      await document.modelContext.executeTool(situation, {});
+      await document.modelContext.executeTool(history, {});
+      await document.modelContext.executeTool(recommendation, {
+        action: "call",
+        stateVersion: 17,
+      });
+    });
+
+    await expect(
+      page.locator(".copilot-recommendation.is-current"),
+    ).toBeVisible();
+    await expect(page.locator(".webmcp-activity-list li")).toHaveCount(3);
+
+    const geometry = await page.evaluate(() => {
+      const rect = (selector: string) => {
+        const element = document.querySelector(selector);
+        if (!element) throw new Error(`Missing ${selector}`);
+        return element.getBoundingClientRect();
+      };
+      const stage = rect(".table-stage");
+      const hero = rect('.player-seat[data-local="true"]');
+      const dock = rect(".human-action-dock");
+      const copilot = rect(".private-copilot");
+      const activity = rect(".webmcp-activity-panel");
+      const activityRows = document.querySelectorAll(
+        ".webmcp-activity-list li",
+      );
+      const lastActivity = activityRows.item(activityRows.length - 1);
+      if (!lastActivity) throw new Error("Missing WebMCP activity rows");
+
+      return {
+        viewportHeight: window.innerHeight,
+        stageHeight: stage.height,
+        heroToDockGap: dock.top - hero.bottom,
+        copilotBottom: copilot.bottom,
+        suggestionBoundaryBottom: rect(".suggestion-boundary").bottom,
+        activityBottom: activity.bottom,
+        lastActivityBottom: lastActivity.getBoundingClientRect().bottom,
+      };
+    });
+
+    expect(geometry.stageHeight).toBeGreaterThanOrEqual(649);
+    expect(geometry.stageHeight).toBeLessThanOrEqual(651);
+    expect(geometry.heroToDockGap).toBeGreaterThanOrEqual(64);
+    expect(geometry.copilotBottom).toBeLessThanOrEqual(
+      geometry.viewportHeight,
+    );
+    expect(geometry.suggestionBoundaryBottom).toBeLessThanOrEqual(
+      geometry.viewportHeight,
+    );
+    expect(geometry.activityBottom).toBeLessThanOrEqual(
+      geometry.viewportHeight,
+    );
+    expect(geometry.lastActivityBottom).toBeLessThanOrEqual(
+      geometry.viewportHeight,
+    );
+  });
 
   for (const viewport of [
     { label: "narrow judge view", width: 831, height: 1252 },

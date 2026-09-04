@@ -10,6 +10,8 @@ interface PlayerSeatProps {
   actionCue?: SeatActionCue;
   localCards?: Card[];
   isYou?: boolean;
+  isWinner?: boolean;
+  payout?: number;
 }
 
 export function PlayerSeat({
@@ -19,6 +21,8 @@ export function PlayerSeat({
   actionCue,
   localCards,
   isYou = false,
+  isWinner = false,
+  payout,
 }: PlayerSeatProps) {
   const visibleCards = localCards?.length ? localCards : player.revealedCards;
   const isLocal = Boolean(localCards?.length);
@@ -50,8 +54,9 @@ export function PlayerSeat({
       }`}
       data-local={isLocal || undefined}
       data-current={isCurrent || undefined}
+      data-winner={isWinner || undefined}
       role="group"
-      aria-label={`${isYou ? "Your" : `${player.displayName}’s`} seat, ${player.stack} chips${statusCue ? `, ${statusCue.toLowerCase()}` : ""}`}
+      aria-label={`${isYou ? "Your" : `${player.displayName}’s`} seat, ${player.stack} chips${typeof payout === "number" ? `, wins ${payout} chips` : ""}${statusCue ? `, ${statusCue.toLowerCase()}` : ""}`}
     >
       <div className="seat-cards card-row" aria-hidden={!showVisibleCards}>
         {showVisibleCards ? (
@@ -109,6 +114,11 @@ export function PlayerSeat({
                   : `${player.displayName} is acting`
                 : actionCue?.ariaLabel ?? statusCue}
             </span>
+          </span>
+        ) : null}
+        {typeof payout === "number" ? (
+          <span className="seat-payout" aria-hidden="true">
+            +{payout} chips
           </span>
         ) : null}
       </div>

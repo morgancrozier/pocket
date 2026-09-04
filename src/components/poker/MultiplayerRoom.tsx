@@ -18,8 +18,11 @@ import {
   createDecisionPresentation,
   describeAction,
 } from "@/lib/poker/decision-presentation";
+import { handResultHoldDuration } from "@/lib/poker/hand-result-countdown";
+import { createHandResultPresentation } from "@/lib/poker/hand-result-presentation";
 import { describeTransitionFrame } from "@/lib/poker/transition-playback";
 import { useBotPacing } from "@/lib/poker/use-bot-pacing";
+import { useHandResultCountdown } from "@/lib/poker/use-hand-result-countdown";
 import {
   createRecommendationReceipt,
   isRecommendationReceiptCurrent,
@@ -153,6 +156,7 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const highestObservedRevisionRef = useRef(0);
   const advanceRevisionRef = useRef<number | null>(null);
+  const advanceInFlightRef = useRef(false);
   const situation = room && room.phase !== "waiting" ? room.situation : null;
 
   const clearSuggestion = useCallback(() => {
@@ -679,30 +683,97 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
     void commitAction(sizedAction.type, amount);
   }
 
-  useEffect(() => {
+  const advanceSettledRoomHand = useCallback(async () => {
+    const current = roomRef.current;
     if (
-      !room ||
-      room.phase !== "active" ||
-      !room.situation.handResult ||
-      advanceRevisionRef.current === room.revision
+      !current ||
+      current.phase !== "active" ||
+      !current.situation.handResult ||
+      advanceInFlightRef.current
     ) {
       return;
     }
-    const revision = room.revision;
-    const timer = window.setTimeout(async () => {
-      advanceRevisionRef.current = revision;
-      try {
-        const payload = await requestJson(`/api/rooms/${roomCode}/advance`, {
-          method: "POST",
-          body: JSON.stringify({ expectedRevision: revision }),
-        });
-        if (isOperationResult(payload)) applyRoom(payload.room);
-      } catch {
-        await refreshRoom();
+
+    const revision = current.revision;
+    advanceRevisionRef.current = revision;
+    advanceInFlightRef.current = true;
+    setSubmitting(true);
+    setError(null);
+    setMessage("Dealing the next hand…");
+    try {
+      const payload = await requestJson(`/api/rooms/${roomCode}/advance`, {
+        method: "POST",
+        body: JSON.stringify({ expectedRevision: revision }),
+      });
+      if (!isOperationResult(payload)) {
+        throw new Error("Pocket returned an invalid next-hand result.");
       }
-    }, 1_800);
-    return () => window.clearTimeout(timer);
-  }, [applyRoom, refreshRoom, room, roomCode]);
+      applyRoom(payload.room);
+    } catch (cause) {
+      let transitionError: string | null = null;
+      if (
+        !(cause instanceof RoomRequestError) ||
+        !["ACTION_IN_PROGRESS", "IDEMPOTENCY_KEY_REUSED", "STALE_STATE"].includes(
+          cause.code ?? "",
+        )
+      ) {
+        transitionError =
+          cause instanceof Error
+            ? cause.message
+            : "The next hand could not be dealt. Try again.";
+      }
+      await refreshRoom();
+      if (
+        transitionError &&
+        roomRef.current?.phase === "active" &&
+        roomRef.current.revision === revision
+      ) {
+        setError(transitionError);
+      }
+    } finally {
+      advanceInFlightRef.current = false;
+      setSubmitting(false);
+    }
+  }, [applyRoom, refreshRoom, roomCode]);
+
+  const resultHoldDuration = situation?.handResult
+    ? handResultHoldDuration(situation.handResult.reason)
+    : 0;
+  const {
+    remainingSeconds: resultRemainingSeconds,
+    progress: resultProgress,
+    cancel: cancelResultCountdown,
+  } = useHandResultCountdown({
+    active: Boolean(
+      room?.phase === "active" &&
+        situation?.handResult &&
+        !situation.gameResult &&
+        !submitting &&
+        advanceRevisionRef.current !== room.revision,
+    ),
+    countdownKey:
+      room && situation
+        ? `${room.gameId}:${situation.handNumber}:${room.revision}`
+        : "no-hand",
+    durationMs: resultHoldDuration,
+    onElapsed: () => void advanceSettledRoomHand(),
+  });
+
+  const dealNextRoomHand = useCallback(() => {
+    cancelResultCountdown();
+    void advanceSettledRoomHand();
+  }, [advanceSettledRoomHand, cancelResultCountdown]);
+
+  const roomPhase = room?.phase;
+  const gameWinnerPlayerId =
+    room?.phase === "complete" ? room.result?.winnerPlayerId : null;
+  const resultPresentation = useMemo(() => {
+    if (!situation) return null;
+    return createHandResultPresentation(situation, {
+      isGameComplete: roomPhase === "complete",
+      gameWinnerPlayerId,
+    });
+  }, [gameWinnerPlayerId, roomPhase, situation]);
 
   async function restartRoom() {
     if (!room || room.phase !== "complete" || !room.viewer.isOwner) return;
@@ -885,6 +956,7 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
             situation={playing.situation}
             presentation={decisionPresentation}
             turnTitle={turnTitle}
+            result={resultPresentation}
           />
           <div
             className="decision-dock"
@@ -902,9 +974,30 @@ export function MultiplayerRoom({ roomCode }: MultiplayerRoomProps) {
               isSpectating={isSpectating}
               recommendation={visibleSuggestion}
               terminalAction={
-                playing.phase === "complete" && playing.viewer.isOwner
-                  ? { label: "Play again", onClick: () => void restartRoom() }
-                  : null
+                playing.phase === "complete"
+                  ? playing.viewer.isOwner
+                    ? { label: "Play again", onClick: () => void restartRoom() }
+                    : null
+                  : playing.situation.handResult && !isSpectating
+                    ? {
+                        label: "Deal next hand",
+                        onClick: dealNextRoomHand,
+                        status:
+                          resultRemainingSeconds > 0
+                            ? `Next hand in ${resultRemainingSeconds}s`
+                            : "Ready when you are",
+                        progress: resultProgress,
+                      }
+                    : null
+              }
+              unavailableMessage={
+                playing.phase === "complete" && !playing.viewer.isOwner
+                  ? "Waiting for the table creator to play again."
+                  : playing.situation.handResult && isSpectating
+                    ? resultRemainingSeconds > 0
+                      ? `Next hand in ${resultRemainingSeconds}s`
+                      : "The next hand is ready."
+                    : undefined
               }
               playback={
                 isBotTurn && !isSpectating

@@ -111,4 +111,40 @@ describe("HumanActionDock recommendation integration", () => {
       expect(html).toContain(label);
     },
   );
+
+  it("renders a visual next-hand countdown with the explicit deal action", () => {
+    const html = renderToStaticMarkup(
+      <HumanActionDock
+        situation={{
+          ...INITIAL_SITUATION,
+          isYourTurn: false,
+          currentActorId: null,
+          legalActions: [],
+          handResult: {
+            reason: "showdown",
+            winners: [
+              { playerId: "hero", playerName: "Morgan", amount: 68 },
+            ],
+          },
+        }}
+        turnTitle="Hand complete"
+        isSubmitting={false}
+        betDraft=""
+        betInputId="result-bet-amount"
+        terminalAction={{
+          label: "Deal next hand",
+          status: "Next hand in 7s",
+          progress: 1,
+          onClick: vi.fn(),
+        }}
+        onBetDraftChange={vi.fn()}
+        onCommit={vi.fn()}
+        onSubmitSizedAction={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("Next hand in 7s");
+    expect(html).toContain("Deal next hand");
+    expect(html).toContain('class="terminal-progress" aria-hidden="true"');
+  });
 });

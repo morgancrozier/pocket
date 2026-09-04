@@ -597,6 +597,11 @@ test("real two-browser room remains seat-safe through spectating and restart", a
     await waitForRevision(pageB, roomCode, complete!.revision);
     await expect(pageA.getByRole("button", { name: "Play again" })).toBeVisible();
     await expect(pageB.getByRole("button", { name: "Play again" })).toHaveCount(0);
+    await expect(
+      pageB.getByText("Waiting for the table creator to play again."),
+    ).toBeVisible();
+    await expect(pageA.locator('.poker-table[data-game-complete="true"]')).toBeVisible();
+    await expect(pageB.locator('.poker-table[data-game-complete="true"]')).toBeVisible();
     const terminalRevision = complete!.revision;
     await pageA.getByRole("button", { name: "Play again" }).click();
     await expect

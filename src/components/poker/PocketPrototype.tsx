@@ -20,9 +20,14 @@ import {
 } from "@/lib/poker/mock-state";
 import { createDecisionPresentation } from "@/lib/poker/decision-presentation";
 import {
+  handResultHoldDuration,
+} from "@/lib/poker/hand-result-countdown";
+import { createHandResultPresentation } from "@/lib/poker/hand-result-presentation";
+import {
   describeTransitionFrame,
 } from "@/lib/poker/transition-playback";
 import { useBotPacing } from "@/lib/poker/use-bot-pacing";
+import { useHandResultCountdown } from "@/lib/poker/use-hand-result-countdown";
 import {
   createRecommendationReceipt,
   isRecommendationReceiptCurrent,
@@ -258,23 +263,6 @@ function chips(amount: number): string {
   return `${amount} chip${amount === 1 ? "" : "s"}`;
 }
 
-function resultMessage(situation: PokerSituation): string {
-  if (situation.gameResult?.outcome === "won") {
-    return "You won the table. Every opponent is out.";
-  }
-  if (situation.gameResult?.outcome === "lost") {
-    return "You’re out. The tournament ends here.";
-  }
-  if (!situation.handResult) return "The bots acted. Your turn again.";
-  const winners = situation.handResult.winners
-    .map(
-      (winner) =>
-        `${winner.playerId === situation.yourPlayerId ? "You win" : `${winner.playerName} wins`} ${chips(winner.amount)}`,
-    )
-    .join(" · ");
-  return winners ? `${winners}.` : "The hand settled.";
-}
-
 function actionPendingMessage(
   receipt: RecommendationReceipt | null,
 ): string {
@@ -304,9 +292,8 @@ export function PocketPrototype() {
   const [betDraftError, setBetDraftError] = useState<string | null>(null);
   const [showDebug, setShowDebug] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const nextHandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const situationRef = useRef<PokerSituation | null>(null);
-  const autoNextHandVersionRef = useRef<number | null>(null);
+  const attemptedResultKeyRef = useRef<string | null>(null);
   const judgeRunRef = useRef<string | null>(null);
   const suggestionRef = useRef<AgentSuggestion | null>(null);
   suggestionRef.current = suggestion;
@@ -392,9 +379,7 @@ export function PocketPrototype() {
       setMode("engine");
       setIsPracticeFallback(false);
       if (!options.keepMessage) {
-        setTableMessage(
-          next.gameResult || next.handResult ? resultMessage(next) : null,
-        );
+        setTableMessage(null);
       }
       return next;
     },
@@ -420,7 +405,9 @@ export function PocketPrototype() {
       if (next.stateVersion <= previous.stateVersion) return;
       situationRef.current = next;
       setSituation(next);
-      setTableMessage(describeTransitionFrame(previous, next));
+      setTableMessage(
+        next.handResult ? null : describeTransitionFrame(previous, next),
+      );
     },
     [],
   );
@@ -528,7 +515,6 @@ export function PocketPrototype() {
   useEffect(() => {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
-      if (nextHandTimerRef.current) clearTimeout(nextHandTimerRef.current);
     };
   }, []);
 
@@ -707,13 +693,7 @@ export function PocketPrototype() {
         const next = transition.situation;
         situationRef.current = next;
         setSituation(next);
-        setTableMessage(
-          next.handResult
-            ? next.gameResult
-              ? resultMessage(next)
-              : `${resultMessage(next)} The next hand starts shortly.`
-            : actionPendingMessage(receipt),
-        );
+        setTableMessage(next.handResult ? null : actionPendingMessage(receipt));
       } catch (error) {
         setTableMessage(
           error instanceof Error ? error.message : "The action was rejected.",
@@ -796,7 +776,6 @@ export function PocketPrototype() {
 
   const startNextEngineHand = useCallback(async () => {
     if (!situation || mode !== "engine" || isSubmitting) return;
-    if (nextHandTimerRef.current) clearTimeout(nextHandTimerRef.current);
     cancelPacing();
     clearSuggestion();
     setIsSubmitting(true);
@@ -840,30 +819,40 @@ export function PocketPrototype() {
     situation,
   ]);
 
-  useEffect(() => {
-    if (
-      mode !== "engine" ||
-      !situation?.handResult ||
-      Boolean(situation.gameResult) ||
-      isSubmitting ||
-      autoNextHandVersionRef.current === situation.stateVersion
-    ) {
-      return;
-    }
-
-    nextHandTimerRef.current = setTimeout(() => {
-      autoNextHandVersionRef.current = situation.stateVersion;
+  const resultHoldDuration = situation?.handResult
+    ? handResultHoldDuration(situation.handResult.reason)
+    : 0;
+  const resultCountdownKey = situation
+    ? `${situation.gameId}:${situation.handNumber}:${situation.stateVersion}`
+    : "no-hand";
+  const {
+    remainingSeconds: resultRemainingSeconds,
+    progress: resultProgress,
+    cancel: cancelResultCountdown,
+  } = useHandResultCountdown({
+    active: Boolean(
+      mode === "engine" &&
+        situation?.handResult &&
+        !situation.gameResult &&
+        !isSubmitting &&
+        attemptedResultKeyRef.current !== resultCountdownKey,
+    ),
+    countdownKey: resultCountdownKey,
+    durationMs: resultHoldDuration,
+    onElapsed: () => {
+      attemptedResultKeyRef.current = resultCountdownKey;
       void startNextEngineHand();
-    }, 1_800);
+    },
+  });
 
-    return () => {
-      if (nextHandTimerRef.current) clearTimeout(nextHandTimerRef.current);
-    };
-  }, [isSubmitting, mode, situation, startNextEngineHand]);
+  const dealNextEngineHand = useCallback(() => {
+    attemptedResultKeyRef.current = resultCountdownKey;
+    cancelResultCountdown();
+    void startNextEngineHand();
+  }, [cancelResultCountdown, resultCountdownKey, startNextEngineHand]);
 
   const restartEngineGame = useCallback(async () => {
     if (!situation?.gameResult || mode !== "engine" || isSubmitting) return;
-    if (nextHandTimerRef.current) clearTimeout(nextHandTimerRef.current);
     cancelPacing();
     clearSuggestion();
     setIsSubmitting(true);
@@ -877,7 +866,6 @@ export function PocketPrototype() {
           body: JSON.stringify({ expectedStateVersion: situation.stateVersion }),
         },
       );
-      autoNextHandVersionRef.current = null;
       clearRecommendationReceipt();
       situationRef.current = transition.situation;
       setSituation(transition.situation);
@@ -913,7 +901,6 @@ export function PocketPrototype() {
 
   async function resetMockDemo() {
     if (timerRef.current) clearTimeout(timerRef.current);
-    if (nextHandTimerRef.current) clearTimeout(nextHandTimerRef.current);
     cancelPacing();
     clearSuggestion();
 
@@ -977,6 +964,7 @@ export function PocketPrototype() {
     isRecommendationReceiptCurrent(situation, recommendationReceipt)
       ? recommendationReceipt
       : null;
+  const resultPresentation = createHandResultPresentation(situation);
   const turnTitle = isSubmitting
       ? currentPlayer && !situation.isYourTurn
         ? `${currentPlayer.displayName} is acting`
@@ -1011,6 +999,7 @@ export function PocketPrototype() {
               situation={situation}
               presentation={decisionPresentation}
               turnTitle={turnTitle}
+              result={resultPresentation}
             />
           ) : null}
 
@@ -1047,11 +1036,21 @@ export function PocketPrototype() {
                     }
                   : situation.handResult
                     ? {
-                        label: mode === "engine" ? "Next hand" : "Reset hand",
+                        label:
+                          mode === "engine" ? "Deal next hand" : "Reset hand",
                         onClick: () => {
                           if (mode === "mock") void resetMockDemo();
-                          else void startNextEngineHand();
+                          else dealNextEngineHand();
                         },
+                        ...(mode === "engine"
+                          ? {
+                              status:
+                                resultRemainingSeconds > 0
+                                  ? `Next hand in ${resultRemainingSeconds}s`
+                                  : "Ready when you are",
+                              progress: resultProgress,
+                            }
+                          : {}),
                       }
                     : null
               }

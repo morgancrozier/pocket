@@ -3209,7 +3209,7 @@ h1 {
 
 .game-layout .table-stage {
   position: relative;
-  min-height: clamp(590px, calc(100svh - 378px), 840px);
+  min-height: clamp(590px, calc(100svh - 486px), 840px);
   overflow: hidden;
   padding: 18px 58px 70px;
   border-radius: 10px;
@@ -3264,6 +3264,34 @@ h1 {
   border-color: rgba(242, 238, 221, 0.08);
 }
 
+.game-layout .poker-table[data-result="settled"] {
+  animation: result-felt-settle 640ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.game-layout .poker-table[data-result="settled"] .table-center {
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 14px;
+}
+
+.game-layout .poker-table[data-result="settled"] .table-result {
+  grid-column: 1;
+  grid-row: 1;
+  justify-items: start;
+  text-align: left;
+}
+
+.game-layout .poker-table[data-result="settled"] .community-cards {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+.game-layout .poker-table[data-result="settled"] .pot-label {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  margin: 0;
+}
+
 .game-layout .table-center {
   gap: 9px;
 }
@@ -3274,6 +3302,38 @@ h1 {
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+}
+
+.table-result {
+  z-index: 3;
+  display: grid;
+  max-width: min(430px, 80vw);
+  justify-items: center;
+  gap: 3px;
+  text-align: center;
+  animation: table-result-arrive 520ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.table-result strong {
+  color: var(--accent-strong);
+  font-family: var(--font-display), Georgia, serif;
+  font-size: clamp(1.35rem, 2.2vw, 1.9rem);
+  font-weight: 560;
+  letter-spacing: -0.025em;
+  line-height: 1;
+  text-wrap: balance;
+}
+
+.table-result span {
+  color: rgba(235, 238, 225, 0.76);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  line-height: 1.35;
+}
+
+.game-layout .poker-table[data-game-complete="true"] .table-result strong {
+  color: var(--success);
 }
 
 .game-layout .playing-card {
@@ -3351,6 +3411,40 @@ h1 {
 
 .game-layout .player-seat[data-current="true"] {
   z-index: 7;
+}
+
+.game-layout .player-seat[data-winner="true"] {
+  z-index: 8;
+}
+
+.game-layout .player-seat[data-winner="true"] .seat-panel {
+  border-color: rgba(233, 200, 106, 0.68);
+  background: #1a1d18;
+  box-shadow:
+    0 16px 34px rgba(0, 0, 0, 0.42),
+    0 0 22px rgba(233, 200, 106, 0.14);
+  animation: winner-seat-settle 560ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.seat-payout {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 20px;
+  align-items: center;
+  justify-content: center;
+  margin: 6px auto 0;
+  padding: 3px 7px;
+  border: 1px solid rgba(233, 200, 106, 0.34);
+  border-radius: 999px;
+  background: rgba(233, 200, 106, 0.1);
+  color: var(--accent-strong);
+  font-size: 0.56rem;
+  font-weight: 820;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.025em;
+  line-height: 1;
+  animation: seat-payout-arrive 620ms 80ms cubic-bezier(0.16, 1, 0.3, 1)
+    both;
 }
 
 .game-layout .seat-name {
@@ -3679,6 +3773,55 @@ h1 {
 
 .human-action-dock .action-buttons > .action-restart {
   flex: 0 1 220px;
+}
+
+.terminal-action {
+  display: flex;
+  width: min(100%, 560px);
+  justify-content: center;
+}
+
+.terminal-action.has-progress {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(170px, 220px);
+  align-items: center;
+  gap: 12px;
+}
+
+.terminal-action:only-child {
+  flex: 1 1 560px;
+}
+
+.terminal-progress {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  color: var(--muted-strong);
+  font-size: 0.7rem;
+  font-weight: 690;
+  font-variant-numeric: tabular-nums;
+}
+
+.terminal-progress-track {
+  position: relative;
+  display: block;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(235, 238, 225, 0.09);
+}
+
+.terminal-progress-track > span {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--accent);
+  transform-origin: left center;
+  transition: transform 1s linear;
+}
+
+.terminal-action .action-restart {
+  width: 100%;
 }
 
 .human-action-dock .action-button.is-contextual-primary {
@@ -4536,6 +4679,11 @@ h1 {
   gap: 6px;
 }
 
+.hand-feed-group.hand-feed-result {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+}
+
 .hand-feed-group.is-current {
   padding-bottom: 2px;
 }
@@ -4934,6 +5082,55 @@ h1 {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes result-felt-settle {
+  0% {
+    box-shadow:
+      inset 0 0 0 2px rgba(255, 255, 255, 0.04),
+      inset 0 -28px 58px rgba(0, 0, 0, 0.28),
+      0 22px 42px rgba(0, 0, 0, 0.38);
+  }
+
+  48% {
+    box-shadow:
+      inset 0 0 38px rgba(233, 200, 106, 0.08),
+      inset 0 -28px 58px rgba(0, 0, 0, 0.28),
+      0 24px 46px rgba(0, 0, 0, 0.42);
+  }
+}
+
+@keyframes table-result-arrive {
+  from {
+    opacity: 0.35;
+    transform: translateY(8px);
+    filter: blur(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+@keyframes winner-seat-settle {
+  from {
+    transform: translateY(5px) scale(0.985);
+    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.3);
+  }
+}
+
+@keyframes seat-payout-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(-7px) scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -5421,6 +5618,10 @@ h1 {
     padding: 14px;
   }
 
+  .terminal-action.has-progress {
+    grid-template-columns: minmax(130px, 1fr) minmax(150px, 0.9fr);
+  }
+
   .private-copilot,
   .webmcp-activity-panel,
   .hand-feed {
@@ -5596,6 +5797,22 @@ h1 {
     border-radius: 8px;
     background: rgba(15, 18, 17, 0.88);
     transform: none;
+  }
+
+  .table-result {
+    grid-column: 1;
+    grid-row: 1;
+    max-width: 100%;
+    justify-items: start;
+    text-align: left;
+  }
+
+  .table-result strong {
+    font-size: 1.18rem;
+  }
+
+  .table-result span {
+    font-size: 0.58rem;
   }
 
   .game-layout .table-street-label {
@@ -5819,6 +6036,11 @@ h1 {
 
   .human-action-dock {
     padding: 14px;
+  }
+
+  .terminal-action.has-progress {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
   }
 
   .playback-controls {
