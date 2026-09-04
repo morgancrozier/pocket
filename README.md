@@ -10,7 +10,7 @@ Built for the WebMCP Challenge.
 
 > **Same table. Different players. Different private information. Different personal agents. Different private context. One authoritative application.**
 >
-> WebMCP connects them without requiring Pocket to own everyone's intelligence—or giving an agent control of the game.
+> WebMCP connects them without requiring Pocket to own everyone's intelligence, and without giving an agent control of the game.
 
 ![Pocket's launcher inviting players to bring their own AI to bot play or a shared table](assets/readme/pocket-launcher.png)
 
@@ -81,14 +81,14 @@ Pocket is built around a copilot, not an autopilot.
 
 Poker makes several difficult agent-interaction problems visible at once:
 
-- **Live shared state** — the board, pot, stacks, and betting change continuously.
-- **Private state** — every player has information that other players and their agents must not receive.
-- **Different participants** — several people share one application while using different agents and private context.
-- **History** — a useful decision often depends on how the hand developed.
-- **Exact rules** — legal actions come from the game, including precise numerical raise limits.
-- **Changing state** — advice can become stale while an agent is still thinking.
-- **Incomplete information** — assistance requires reasoning rather than simple retrieval.
-- **Human judgment** — the agent can help without taking control.
+- **Live shared state:** The board, pot, stacks, and betting change continuously.
+- **Private state:** Every player has information that other players and their agents must not receive.
+- **Different participants:** Several people share one application while using different agents and private context.
+- **History:** A useful decision often depends on how the hand developed.
+- **Exact rules:** Legal actions come from the game, including precise numerical raise limits.
+- **Changing state:** Advice can become stale while an agent is still thinking.
+- **Incomplete information:** Assistance requires reasoning rather than simple retrieval.
+- **Human judgment:** The agent can help without taking control.
 
 Those are not only poker problems. Poker just makes them unusually easy to see.
 
