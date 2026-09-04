@@ -65,6 +65,8 @@ export function usePokerTools({
 }: UsePokerToolsInput) {
   const [availabilityState, setAvailabilityState] =
     useState<WebMCPSupportState>("checking");
+  const [readToolsReady, setReadToolsReady] = useState(false);
+  const [recommendationToolReady, setRecommendationToolReady] = useState(false);
   const [readRegistrationError, setReadRegistrationError] = useState<
     string | null
   >(null);
@@ -161,16 +163,21 @@ export function usePokerTools({
   useEffect(() => {
     if (!registrationEnabled) {
       setAvailabilityState("checking");
+      setReadToolsReady(false);
       setReadRegistrationError(null);
       return;
     }
 
     if (!hasWebMCP()) {
       setAvailabilityState("unavailable");
+      setReadToolsReady(false);
       setReadRegistrationError(null);
       return;
     }
 
+    setAvailabilityState("checking");
+    setReadToolsReady(false);
+    setReadRegistrationError(null);
     const controller = new AbortController();
     let active = true;
 
@@ -198,12 +205,14 @@ export function usePokerTools({
 
         if (active) {
           setAvailabilityState("available");
+          setReadToolsReady(true);
           setReadRegistrationError(null);
         }
       } catch (error) {
         if (controller.signal.aborted) return;
         controller.abort();
         if (active) {
+          setReadToolsReady(false);
           setReadRegistrationError(
             error instanceof Error ? error.message : "WebMCP registration failed.",
           );
@@ -221,15 +230,19 @@ export function usePokerTools({
 
   useEffect(() => {
     if (!registrationEnabled) {
+      setRecommendationToolReady(false);
       setSuggestionRegistrationError(null);
       return;
     }
 
     if (!hasWebMCP()) {
+      setRecommendationToolReady(false);
       setSuggestionRegistrationError(null);
       return;
     }
 
+    setRecommendationToolReady(false);
+    setSuggestionRegistrationError(null);
     const controller = new AbortController();
     let active = true;
 
@@ -249,9 +262,13 @@ export function usePokerTools({
         await document.modelContext.registerTool(tool, {
           signal: controller.signal,
         });
-        if (active) setSuggestionRegistrationError(null);
+        if (active) {
+          setRecommendationToolReady(true);
+          setSuggestionRegistrationError(null);
+        }
       } catch (error) {
         if (controller.signal.aborted || !active) return;
+        setRecommendationToolReady(false);
         setSuggestionRegistrationError(
           error instanceof Error
             ? error.message
@@ -272,7 +289,13 @@ export function usePokerTools({
     suggestionRegistrationError ?? readRegistrationError;
   const supportState: WebMCPSupportState = registrationError
     ? "error"
-    : availabilityState;
+    : availabilityState === "unavailable"
+      ? "unavailable"
+      : availabilityState === "available" &&
+          readToolsReady &&
+          recommendationToolReady
+        ? "available"
+        : "checking";
 
   return {
     supportState,

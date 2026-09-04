@@ -535,8 +535,9 @@ export function createCurrentSituationTool({
 }: SituationToolContext): WebMCPTool {
   return {
     name: "get_current_situation",
+    title: "Read current hand",
     description:
-      "Read authoritative, seat-safe state: hero cards, board, stacks, next actor, and legal actions. context.recentEvents contains only the final six normalized public betting/action events; rows follow context.eventFields. Use get_hand_history when context.totalActionCount exceeds context.recentEvents.length, or when earlier streets or action sequencing matter. Forced posts are separate from voluntary actions. amountToCall is chips to add; bet/raise totals mean raise to X. Re-read after changes.",
+      "Read authoritative, seat-safe hand state: hero cards, board, stacks, next actor, legal actions, and the last 6 public events. Use get_hand_history for earlier action order. Forced posts are separate from voluntary actions. amountToCall is chips to add; bet/raise amounts are final street totals (raise to X). Re-read after changes. For advice or 'what should I do?', this is step 1 of 2: decide, then call stage_recommendation with this exact stateVersion before replying.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -705,6 +706,7 @@ export function createHandHistoryTool({
 }: HandHistoryToolContext): WebMCPTool {
   return {
     name: "get_hand_history",
+    title: "Read hand history",
     description:
       "Read a bounded, paginated public betting/action ledger for the current hand. Use it for full-hand, earlier-street, and betting-line analysis. Only the current hand is retrievable; compare its returned hand identity and stateVersion with get_current_situation. Rows follow eventFields; forced posts and voluntary actions are separate, calls show chips added, and bet/raise amounts are final street totals. Results are chronological; use beforeSequence while page.hasEarlier is true.",
     inputSchema: {
@@ -774,8 +776,9 @@ export function createStageRecommendationTool({
 }: RecommendationToolContext): WebMCPTool {
   return {
     name: "stage_recommendation",
+    title: "Show recommendation in Pocket",
     description:
-      "After deciding what the player should do, call this tool to display/stage that recommendation inside Pocket. It never executes the poker action. Use the exact stateVersion and a current legal action from get_current_situation. For bet/raise, amount is the final street total (raise to X). The human may use, change, or ignore it.",
+      "Required final step for advice, recommendation, or 'what should I do?' requests. After get_current_situation and deciding, call this before replying to display the recommendation in Pocket; a prose-only answer is incomplete. It never executes the poker action. Use the exact stateVersion and a current legal action. For bet/raise, amount is the final street total (raise to X). The human may use, change, or ignore it.",
     inputSchema: {
       type: "object",
       properties: {
@@ -818,6 +821,7 @@ export function createStageRecommendationTool({
     annotations: {
       readOnlyHint: false,
       untrustedContentHint: false,
+      consequentialHint: false,
     },
     execute: async (input) => {
       onActivity?.({ phase: "started", tool: "stage_recommendation" });

@@ -34,7 +34,7 @@ describe("AgentSuggestionPanel", () => {
     expect(html).toContain("Private copilot");
     expect(html).toContain("Ready");
     expect(html).toContain(
-      "Ask your browser agent for advice. It will appear here.",
+      "Ask your browser agent: ‘Recommend my best action and send it back to Pocket.’",
     );
     expect(html).toContain("Recommendations never execute a poker action");
     expect(html).not.toContain("copilot-recommendation is-awaiting");
@@ -140,7 +140,9 @@ describe("AgentSuggestionPanel registration truthfulness", () => {
   it("states WebMCP readiness without claiming an agent connection", () => {
     const openHtml = renderPanel();
     expect(openHtml).toContain("Ready");
-    expect(openHtml).toContain("Ask your browser agent for advice");
+    expect(openHtml).toContain(
+      "Recommend my best action and send it back to Pocket",
+    );
     expect(openHtml).not.toContain("Seat-safe connection");
     expect(openHtml).not.toContain("tools registered");
 

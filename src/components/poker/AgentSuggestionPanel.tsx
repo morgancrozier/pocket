@@ -44,7 +44,7 @@ function supportCopy(
     return {
       label: "Ready",
       detail: isDecisionOpen
-        ? "Ask your browser agent for advice. It will appear here."
+        ? "Ask your browser agent: ‘Recommend my best action and send it back to Pocket.’"
         : "Your browser agent can read this seat-safe table.",
     };
   }

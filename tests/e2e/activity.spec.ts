@@ -319,6 +319,7 @@ test.describe("in-game activity clarity", () => {
       }
       return {
         names: tools.map((tool) => tool.name).sort(),
+        titles: Object.fromEntries(tools.map((tool) => [tool.name, tool.title])),
         currentDescription: current.description,
         currentResult: JSON.parse(
           await document.modelContext.executeTool(current, {}),
@@ -332,7 +333,16 @@ test.describe("in-game activity clarity", () => {
       "get_hand_history",
       "stage_recommendation",
     ]);
+    expect(browserContract.titles).toEqual({
+      get_current_situation: "Read current hand",
+      get_hand_history: "Read hand history",
+      stage_recommendation: "Show recommendation in Pocket",
+    });
     expect(browserContract.currentDescription).toContain("authoritative");
+    expect(browserContract.currentDescription).toContain("step 1 of 2");
+    expect(browserContract.currentDescription).toContain(
+      "call stage_recommendation with this exact stateVersion before replying",
+    );
     expect(browserContract.currentResult).toMatchObject({
       game: { stateVersion: 17 },
       context: {
@@ -366,7 +376,7 @@ test.describe("in-game activity clarity", () => {
       "folded",
     );
     expect(browserContract.suggestionDescription).toContain(
-      "After deciding what the player should do",
+      "Required final step for advice, recommendation, or 'what should I do?' requests",
     );
     expect(browserContract.suggestionDescription).toContain(
       "never executes the poker action",

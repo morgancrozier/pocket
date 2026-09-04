@@ -693,9 +693,17 @@ describe("Poker WebMCP definitions", () => {
     expect(amountSchema.description).toContain("raise to X, never raise by X");
     expect(stateVersionSchema).toMatchObject({ type: "integer", minimum: 1 });
     expect(stateVersionSchema.description).toContain("get_current_situation");
-    expect(suggestionTool.description).toContain(
-      "After deciding what the player should do",
+    expect(readTools[0]!.title).toBe("Read current hand");
+    expect(readTools[1]!.title).toBe("Read hand history");
+    expect(suggestionTool.title).toBe("Show recommendation in Pocket");
+    expect(readTools[0]!.description).toContain("step 1 of 2");
+    expect(readTools[0]!.description).toContain(
+      "call stage_recommendation with this exact stateVersion before replying",
     );
+    expect(suggestionTool.description).toContain(
+      "Required final step for advice, recommendation, or 'what should I do?' requests",
+    );
+    expect(suggestionTool.description).toContain("call this before replying");
     expect(suggestionTool.description).toContain(
       "It never executes the poker action",
     );
@@ -719,6 +727,7 @@ describe("Poker WebMCP definitions", () => {
     expect(suggestionTool.annotations).toEqual({
       readOnlyHint: false,
       untrustedContentHint: false,
+      consequentialHint: false,
     });
     for (const tool of tools) {
       expect(tool.name.length).toBeLessThanOrEqual(30);

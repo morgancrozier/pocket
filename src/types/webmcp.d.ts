@@ -8,10 +8,12 @@ type WebMCPJsonSchema = {
 interface WebMCPToolAnnotations {
   readOnlyHint?: boolean;
   untrustedContentHint?: boolean;
+  consequentialHint?: boolean;
 }
 
 interface WebMCPTool {
   name: string;
+  title?: string;
   description: string;
   inputSchema: WebMCPJsonSchema;
   annotations?: WebMCPToolAnnotations;
@@ -20,6 +22,7 @@ interface WebMCPTool {
 
 interface RegisteredWebMCPTool {
   name: string;
+  title?: string;
   description: string;
   inputSchema: WebMCPJsonSchema;
   annotations?: WebMCPToolAnnotations;

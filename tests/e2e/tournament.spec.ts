@@ -271,10 +271,19 @@ const restartedSituation = {
 
 async function installWebMCPStub(
   page: Page,
-  options: { blockSuggestionRegistration?: boolean } = {},
+  options: {
+    blockSuggestionRegistration?: boolean;
+    deferSuggestionRegistration?: boolean;
+  } = {},
 ) {
-  await page.addInitScript(({ blockSuggestionRegistration }) => {
-    const tools = new Map<string, { name: string; execute: (input: object) => unknown }>();
+  await page.addInitScript(({
+    blockSuggestionRegistration,
+    deferSuggestionRegistration,
+  }) => {
+    const tools = new Map<
+      string,
+      { name: string; execute: (input: object) => unknown }
+    >();
     const audit = {
       registrations: {} as Record<string, number>,
       aborts: {} as Record<string, number>,
@@ -284,6 +293,12 @@ async function installWebMCPStub(
     const toolIds = new WeakMap<object, number>();
     let nextToolId = 1;
     let suggestionRegistrationBlocked = Boolean(blockSuggestionRegistration);
+    let releaseDeferredSuggestionRegistration: (() => void) | null = null;
+    const deferredSuggestionRegistration = deferSuggestionRegistration
+      ? new Promise<void>((resolve) => {
+          releaseDeferredSuggestionRegistration = resolve;
+        })
+      : null;
     Object.defineProperty(window, "__pocketWebMCPAudit", {
       configurable: true,
       value: audit,
@@ -292,6 +307,8 @@ async function installWebMCPStub(
       configurable: true,
       value: () => {
         suggestionRegistrationBlocked = false;
+        releaseDeferredSuggestionRegistration?.();
+        releaseDeferredSuggestionRegistration = null;
       },
     });
     Object.defineProperty(document, "modelContext", {
@@ -301,6 +318,13 @@ async function installWebMCPStub(
           tool: { name: string; execute: (input: object) => unknown },
           options?: { signal?: AbortSignal },
         ) {
+          if (
+            deferredSuggestionRegistration &&
+            tool.name === "stage_recommendation"
+          ) {
+            await deferredSuggestionRegistration;
+            if (options?.signal?.aborted) return;
+          }
           if (
             suggestionRegistrationBlocked &&
             tool.name === "stage_recommendation"
@@ -338,6 +362,54 @@ async function installWebMCPStub(
     });
   }, options);
 }
+
+test("reports WebMCP as preparing until the recommendation tool is registered", async ({
+  page,
+}) => {
+  await installWebMCPStub(page, { deferSuggestionRegistration: true });
+  await page.route("**/api/games/demo/state", (route) =>
+    route.fulfill({ status: 200, json: initialSituation }),
+  );
+
+  await page.goto("/play");
+  await expect
+    .poll(async () =>
+      page.evaluate(async () =>
+        (await document.modelContext.getTools())
+          .map((tool) => tool.name)
+          .sort(),
+      ),
+    )
+    .toEqual(["get_current_situation", "get_hand_history"]);
+  await expect(page.locator("header .status-pill")).toHaveText(
+    "Preparing WebMCP",
+  );
+
+  await page.evaluate(() => {
+    (
+      window as typeof window & {
+        __releasePocketSuggestionRegistration: () => void;
+      }
+    ).__releasePocketSuggestionRegistration();
+  });
+
+  await expect(page.locator("header .status-pill")).toHaveText(
+    "WebMCP tools ready",
+  );
+  await expect
+    .poll(async () =>
+      page.evaluate(async () =>
+        (await document.modelContext.getTools())
+          .map((tool) => tool.name)
+          .sort(),
+      ),
+    )
+    .toEqual([
+      "get_current_situation",
+      "get_hand_history",
+      "stage_recommendation",
+    ]);
+});
 
 async function webMCPAudit(page: Page) {
   return page.evaluate(
@@ -940,7 +1012,11 @@ test("safe tournament UI replaces and follows advice through restart", async ({
   ]) {
     expect(initialWebMCPAudit.registrations[name]).toBeGreaterThanOrEqual(1);
   }
-  await expect(page.getByText("Ready for your browser agent.")).toBeVisible();
+  await expect(
+    page.getByText(
+      "Ask your browser agent: ‘Recommend my best action and send it back to Pocket.’",
+    ),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "Raise to…", exact: true }).click();
   const amount = page.getByRole("spinbutton", { name: "Raise to", exact: true });
@@ -1019,10 +1095,14 @@ test("safe tournament UI replaces and follows advice through restart", async ({
     page.getByRole("heading", { name: "Recommendation followed" }),
   ).toBeVisible();
   await expect(page.getByText("You confirmed Call 4.")).toBeVisible();
-  await page.getByRole("button", { name: "Full history" }).click();
-  await expect(page.locator(".history-recommendation-followed")).toHaveText(
-    "followed",
-  );
+  await page
+    .getByRole("button", { name: "Open current hand history" })
+    .click();
+  await expect(
+    page
+      .getByRole("dialog", { name: "Full hand history" })
+      .locator(".history-recommendation-followed"),
+  ).toHaveText("followed");
   await page.getByRole("button", { name: "Close full hand history" }).click();
   await expect(page.getByRole("button", { name: "Play again" })).toBeVisible();
   await expect(
@@ -1047,7 +1127,11 @@ test("safe tournament UI replaces and follows advice through restart", async ({
     page.getByText("Blinds 1 / 2", { exact: false }).first(),
   ).toBeVisible();
   await expect(page.getByText("Recommendation followed")).toHaveCount(0);
-  await expect(page.getByText("Ready for your browser agent.")).toBeVisible();
+  await expect(
+    page.getByText(
+      "Ask your browser agent: ‘Recommend my best action and send it back to Pocket.’",
+    ),
+  ).toBeVisible();
   expect(restartBodies).toEqual([{ expectedStateVersion: 24 }]);
   const restartedWebMCPAudit = await webMCPAudit(page);
   expect(restartedWebMCPAudit).toEqual(initialWebMCPAudit);
@@ -1135,10 +1219,14 @@ test("rejected actions do not create receipts and accepted overrides do", async 
   await expect(
     page.getByText("Your copilot suggested Raise to 12; you chose Raise to 16."),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Full history" }).click();
-  await expect(page.locator(".history-recommendation-overridden")).toHaveText(
-    "overridden",
-  );
+  await page
+    .getByRole("button", { name: "Open current hand history" })
+    .click();
+  await expect(
+    page
+      .getByRole("dialog", { name: "Full hand history" })
+      .locator(".history-recommendation-overridden"),
+  ).toHaveText("overridden");
   expect(actionBodies).toHaveLength(2);
   expect(actionBodies[1]).toEqual({
     action: "raise",
